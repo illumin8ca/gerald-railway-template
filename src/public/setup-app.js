@@ -201,10 +201,23 @@
         githubTokenStatus.style.color = '#8892b0';
       }
 
-      // Fetch all repos using pagination (GitHub API max 100 per page)
+      // First try /installation/repositories (fine-grained PATs with selected repos)
+      // Falls back to /user/repos if that fails
       var allRepos = [];
+
+      function fetchInstallationRepos() {
+        return fetch('https://api.github.com/installation/repositories?per_page=100', {
+          headers: { 'Authorization': 'Bearer ' + token }
+        }).then(function(res) {
+          if (!res.ok) return null; // Not an installation token, fall back
+          return res.json().then(function(data) {
+            return data.repositories || null;
+          });
+        }).catch(function() { return null; });
+      }
+
       function fetchPage(page) {
-        return fetch('https://api.github.com/user/repos?per_page=100&sort=updated&type=all&page=' + page, {
+        return fetch('https://api.github.com/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member&page=' + page, {
           headers: { 'Authorization': 'Bearer ' + token }
         })
         .then(function(res) {
@@ -225,7 +238,12 @@
         });
       }
 
-      fetchAllPages(1)
+      // Try installation repos first (fine-grained PATs with selected repos), fall back to user repos
+      fetchInstallationRepos()
+        .then(function(installRepos) {
+          if (installRepos && installRepos.length > 0) return installRepos;
+          return fetchAllPages(1);
+        })
         .then(function(repos) {
           githubTokenSaveBtn.textContent = '✓ Saved';
           githubTokenSaveBtn.style.background = '#22c55e';

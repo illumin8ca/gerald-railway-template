@@ -138,15 +138,12 @@
       <a href="https://console.twilio.com/" target="_blank">Twilio Console →</a>
     </div>
 
-    <label>Cloudflare Turnstile Site Key</label>
-    <input id="turnstileSiteKey" type="text" placeholder="" />
-
-    <label>Cloudflare Turnstile Secret Key</label>
-    <input id="turnstileSecretKey" type="password" placeholder="" />
-    <div class="muted" style="margin-top: 0.25rem">
-      Auto-created during setup if Cloudflare is configured. Override here if needed.
-      <a href="https://dash.cloudflare.com/?to=/:account/turnstile" target="_blank">Manage Turnstile →</a>
+    <div class="muted" style="margin-top: 1rem; padding: 0.75rem; border: 1px solid #2a2a3a; border-radius: 6px;">
+      <strong>🛡️ Turnstile CAPTCHA</strong> — Auto-generated during setup when Cloudflare is configured. No manual setup needed.
+      <a href="https://dash.cloudflare.com/?to=/:account/turnstile" target="_blank">Manage →</a>
     </div>
+    <input id="turnstileSiteKey" type="hidden" />
+    <input id="turnstileSecretKey" type="hidden" />
   </div>
 
   <div class="card">
