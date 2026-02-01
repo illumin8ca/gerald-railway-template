@@ -74,7 +74,8 @@
       The client's primary domain. This will configure routing for:<br/>
       <code>clientdomain.com</code> (production) &middot;
       <code>dev.clientdomain.com</code> (staging) &middot;
-      <code>gerald.clientdomain.com</code> (chat)
+      <code>gerald.clientdomain.com</code> (chat)<br/>
+      <strong>Auto-configured:</strong> DNS records (Cloudflare) &middot; Turnstile CAPTCHA keys
     </div>
 
     <label>Client Name</label>
@@ -136,8 +137,8 @@
     <label>Cloudflare Turnstile Secret Key</label>
     <input id="turnstileSecretKey" type="password" placeholder="" />
     <div class="muted" style="margin-top: 0.25rem">
-      For protecting contact forms.
-      <a href="https://dash.cloudflare.com/?to=/:account/turnstile" target="_blank">Get Turnstile keys →</a>
+      Auto-created during setup if Cloudflare is configured. Override here if needed.
+      <a href="https://dash.cloudflare.com/?to=/:account/turnstile" target="_blank">Manage Turnstile →</a>
     </div>
   </div>
 

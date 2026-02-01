@@ -528,8 +528,12 @@ app.get("/setup/api/status", requireSetupAuth, async (_req, res) => {
     channelsAddHelp: channelsHelp.output,
     authGroups,
     defaultAuthGroup: process.env.DEFAULT_MODEL?.includes('moonshot') ? 'moonshot' : null,
+    defaultAuthChoice: process.env.DEFAULT_MODEL?.includes('moonshot') ? 'moonshot-api-key' : null,
+    defaultAuthSecret: process.env.MOONSHOT_API_KEY?.trim() ? '••••••••' : null,
+    hasDefaultApiKey: !!process.env.MOONSHOT_API_KEY?.trim(),
     defaultModel: process.env.DEFAULT_MODEL || null,
     defaultClientDomain: process.env.CLIENT_DOMAIN?.trim() || null,
+    cloudflareConfigured: !!(process.env.CLOUDFLARE_API_KEY?.trim() && process.env.CLOUDFLARE_EMAIL?.trim()),
   });
 });
 
@@ -560,7 +564,11 @@ function buildOnboardArgs(payload) {
     args.push("--auth-choice", payload.authChoice);
 
     // Map secret to correct flag for common choices.
-    const secret = (payload.authSecret || "").trim();
+    // Fall back to env var API key if user didn't enter one manually
+    let secret = (payload.authSecret || "").trim();
+    if (!secret && payload.authChoice === "moonshot-api-key" && process.env.MOONSHOT_API_KEY?.trim()) {
+      secret = process.env.MOONSHOT_API_KEY.trim();
+    }
     const map = {
       "openai-api-key": "--openai-api-key",
       apiKey: "--anthropic-api-key",
@@ -611,6 +619,136 @@ function runCmd(cmd, args, opts = {}) {
 
     proc.on("close", (code) => resolve({ code: code ?? 0, output: out }));
   });
+}
+
+async function setupCloudflareDNS(domain, railwayDomain) {
+  const cfKey = process.env.CLOUDFLARE_API_KEY?.trim();
+  const cfEmail = process.env.CLOUDFLARE_EMAIL?.trim();
+  if (!cfKey || !cfEmail) {
+    return { ok: false, output: 'Cloudflare API key or email not set in environment variables' };
+  }
+
+  const cfHeaders = {
+    'X-Auth-Email': cfEmail,
+    'X-Auth-Key': cfKey,
+    'Content-Type': 'application/json',
+  };
+
+  let output = '';
+
+  // 1. Look up zone ID
+  const zoneRes = await fetch(`https://api.cloudflare.com/client/v4/zones?name=${domain}`, { headers: cfHeaders });
+  const zoneData = await zoneRes.json();
+
+  if (!zoneData.success || !zoneData.result?.length) {
+    return { ok: false, output: `Domain ${domain} not found in Cloudflare account. Add it to Cloudflare first.` };
+  }
+
+  const zoneId = zoneData.result[0].id;
+  output += `Zone found: ${zoneId}\n`;
+
+  // 2. Get existing DNS records
+  const existingRes = await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records`, { headers: cfHeaders });
+  const existingData = await existingRes.json();
+  const existingRecords = existingData.result || [];
+
+  // 3. Create/update CNAME records for root, dev, and gerald subdomains
+  const records = [
+    { name: domain, type: 'CNAME' },
+    { name: `dev.${domain}`, type: 'CNAME' },
+    { name: `gerald.${domain}`, type: 'CNAME' },
+  ];
+
+  // Also ensure www redirects to root
+  records.push({ name: `www.${domain}`, type: 'CNAME', content: domain });
+
+  for (const record of records) {
+    const content = record.content || railwayDomain;
+    const existing = existingRecords.find(r => r.name === record.name && r.type === record.type);
+
+    if (existing) {
+      // Update existing record
+      const updateRes = await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records/${existing.id}`, {
+        method: 'PUT',
+        headers: cfHeaders,
+        body: JSON.stringify({
+          type: record.type,
+          name: record.name,
+          content: content,
+          proxied: true,
+        }),
+      });
+      const updateData = await updateRes.json();
+      output += `Updated ${record.name} → ${content} (${updateData.success ? 'OK' : JSON.stringify(updateData.errors)})\n`;
+    } else {
+      // Create new record
+      const createRes = await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records`, {
+        method: 'POST',
+        headers: cfHeaders,
+        body: JSON.stringify({
+          type: record.type,
+          name: record.name,
+          content: content,
+          proxied: true,
+        }),
+      });
+      const createData = await createRes.json();
+      output += `Created ${record.name} → ${content} (${createData.success ? 'OK' : JSON.stringify(createData.errors)})\n`;
+    }
+  }
+
+  return { ok: true, output, zoneId };
+}
+
+async function createTurnstileWidget(domain, zoneId) {
+  const cfKey = process.env.CLOUDFLARE_API_KEY?.trim();
+  const cfEmail = process.env.CLOUDFLARE_EMAIL?.trim();
+  if (!cfKey || !cfEmail) {
+    return { ok: false, output: 'Cloudflare credentials not available' };
+  }
+
+  const cfHeaders = {
+    'X-Auth-Email': cfEmail,
+    'X-Auth-Key': cfKey,
+    'Content-Type': 'application/json',
+  };
+
+  // Get account ID from the zone
+  const zoneRes = await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}`, { headers: cfHeaders });
+  const zoneData = await zoneRes.json();
+  const accountId = zoneData.result?.account?.id;
+
+  if (!accountId) {
+    return { ok: false, output: 'Could not determine Cloudflare account ID' };
+  }
+
+  // Create Turnstile widget
+  const turnstileRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/challenges/widgets`, {
+    method: 'POST',
+    headers: cfHeaders,
+    body: JSON.stringify({
+      name: `${domain} Contact Form`,
+      domains: [domain, `dev.${domain}`, `gerald.${domain}`],
+      mode: 'managed',
+      bot_fight_mode: false,
+    }),
+  });
+
+  const turnstileData = await turnstileRes.json();
+
+  if (!turnstileData.success) {
+    return { ok: false, output: `Turnstile creation failed: ${JSON.stringify(turnstileData.errors)}` };
+  }
+
+  const siteKey = turnstileData.result.sitekey;
+  const secretKey = turnstileData.result.secret;
+
+  return {
+    ok: true,
+    siteKey,
+    secretKey,
+    output: `Turnstile widget created: ${siteKey}`,
+  };
 }
 
 async function cloneAndBuild(repoUrl, branch, targetDir, token) {
@@ -799,10 +937,10 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
           String(INTERNAL_GATEWAY_PORT),
         ]),
       );
-      // Allow Control UI access without device pairing (fixes error 1008: pairing required)
+      // Disable Control UI for security — clients use web chat only, not the admin panel
       await runCmd(
         OPENCLAW_NODE,
-        clawArgs(["config", "set", "gateway.controlUi.allowInsecureAuth", "true"]),
+        clawArgs(["config", "set", "gateway.controlUi.enabled", "false"]),
       );
 
       const channelsHelp = await runCmd(
@@ -962,6 +1100,41 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
         } catch (err) {
           console.error('[illumin8] Failed to write CLIENT-SKILLS.md:', err);
           extra += `\n[illumin8] Warning: Could not write CLIENT-SKILLS.md: ${err.message}\n`;
+        }
+      }
+
+      // ── Auto-configure Cloudflare DNS ─────────────────────────────────────
+      if (payload.clientDomain?.trim() && process.env.CLOUDFLARE_API_KEY?.trim()) {
+        const domain = payload.clientDomain.trim().toLowerCase();
+
+        // Determine Railway domain for CNAME target
+        // Use the Railway-assigned domain or fall back to a generated one
+        const railwayDomain = process.env.RAILWAY_PUBLIC_DOMAIN?.trim()
+          || process.env.RAILWAY_STATIC_URL?.replace('https://', '')?.trim()
+          || 'gerald-production.up.railway.app'; // fallback
+
+        extra += `\n[dns] Configuring Cloudflare DNS for ${domain}...\n`;
+        const dnsResult = await setupCloudflareDNS(domain, railwayDomain);
+        extra += `[dns] ${dnsResult.output}\n`;
+
+        // Auto-create Turnstile widget
+        if (dnsResult.ok && dnsResult.zoneId) {
+          extra += `[turnstile] Creating Turnstile widget...\n`;
+          const turnstileResult = await createTurnstileWidget(domain, dnsResult.zoneId);
+          extra += `[turnstile] ${turnstileResult.output}\n`;
+
+          if (turnstileResult.ok) {
+            // Auto-save Turnstile keys to services config
+            const servicesPath = path.join(STATE_DIR, 'services.json');
+            let services = {};
+            try { services = JSON.parse(fs.readFileSync(servicesPath, 'utf8')); } catch {}
+            services.turnstile = {
+              siteKey: turnstileResult.siteKey,
+              secretKey: turnstileResult.secretKey,
+            };
+            fs.writeFileSync(servicesPath, JSON.stringify(services, null, 2));
+            extra += `[turnstile] Keys saved to services.json\n`;
+          }
         }
       }
 

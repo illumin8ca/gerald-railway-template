@@ -64,8 +64,16 @@
       if (j.defaultAuthGroup) {
         authGroupEl.value = j.defaultAuthGroup;
         authGroupEl.onchange();
-        if (j.defaultAuthGroup === 'moonshot') {
-          authChoiceEl.value = 'moonshot-api-key';
+        if (j.defaultAuthChoice) {
+          authChoiceEl.value = j.defaultAuthChoice;
+        }
+      }
+
+      // Show that API key is pre-configured from env var
+      if (j.hasDefaultApiKey) {
+        var secretEl = document.getElementById('authSecret');
+        if (secretEl && !secretEl.value) {
+          secretEl.placeholder = 'Pre-configured from environment (leave blank to use default)';
         }
       }
 
