@@ -394,18 +394,21 @@ app.use(express.json({ limit: "1mb" }));
 // Minimal health endpoint for Railway.
 app.get("/setup/healthz", (_req, res) => res.json({ ok: true }));
 
-// Serve static files for setup wizard
+// Serve static files for setup wizard (no-cache to avoid stale JS/CSS)
 app.get("/setup/app.js", requireSetupAuth, (_req, res) => {
+  res.set("Cache-Control", "no-cache, no-store, must-revalidate");
   res.type("application/javascript");
   res.sendFile(path.join(process.cwd(), "src", "public", "setup-app.js"));
 });
 
 app.get("/setup/styles.css", requireSetupAuth, (_req, res) => {
+  res.set("Cache-Control", "no-cache, no-store, must-revalidate");
   res.type("text/css");
   res.sendFile(path.join(process.cwd(), "src", "public", "styles.css"));
 });
 
 app.get("/setup", requireSetupAuth, (_req, res) => {
+  res.set("Cache-Control", "no-cache, no-store, must-revalidate");
   res.sendFile(path.join(process.cwd(), "src", "public", "setup.html"));
 });
 
