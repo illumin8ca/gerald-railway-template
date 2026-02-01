@@ -809,11 +809,37 @@ async function cloneAndBuild(repoUrl, branch, targetDir, token) {
     const cleanEnv = {
       ...process.env,
       PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/linuxbrew/.linuxbrew/bin',
+      // Prevent esbuild from finding stale binaries during postinstall
+      ESBUILD_BINARY_PATH: '',
     };
-    const install = await runCmd('npm', ['install'], { cwd: targetDir, env: cleanEnv });
+    
+    // Step 1: Install without running postinstall scripts (avoids esbuild version conflicts)
+    console.log(`[build] Installing dependencies (--ignore-scripts)...`);
+    const install = await runCmd('npm', ['install', '--ignore-scripts'], { cwd: targetDir, env: cleanEnv });
     if (install.code !== 0) {
       console.error(`[build] npm install failed: ${install.output}`);
       return { ok: false, output: install.output };
+    }
+    
+    // Step 2: Re-run esbuild's install to fetch correct platform-specific binary
+    // Find all esbuild install.js files and run them individually
+    const { execSync } = await import('child_process');
+    try {
+      const esbuildDirs = execSync(
+        `find ${targetDir}/node_modules -name "install.js" -path "*/esbuild/*" -not -path "*/node_modules/*/node_modules/*/node_modules/*"`,
+        { encoding: 'utf8', env: cleanEnv }
+      ).trim().split('\n').filter(Boolean);
+      
+      for (const installScript of esbuildDirs) {
+        const esbuildDir = path.dirname(installScript);
+        console.log(`[build] Running esbuild install in ${path.relative(targetDir, esbuildDir)}...`);
+        // Remove any cached/linked binary first
+        const binPath = path.join(esbuildDir, 'bin', 'esbuild');
+        try { fs.unlinkSync(binPath); } catch {}
+        await runCmd('node', ['install.js'], { cwd: esbuildDir, env: cleanEnv });
+      }
+    } catch (e) {
+      console.log(`[build] esbuild re-install: ${e.message || 'no esbuild found (OK)'}`);
     }
 
     // Build the site
