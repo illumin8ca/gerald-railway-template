@@ -58,6 +58,7 @@ RUN apt-get update \
     sudo \
     ffmpeg \
     rclone \
+    imagemagick \
   && rm -rf /var/lib/apt/lists/*
 
 # Install Homebrew (must run as non-root user)
@@ -88,8 +89,9 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'exec node /openclaw/dist/entry.js "$@"'
 
 COPY src ./src
 
-# Rclone: use persistent config from /data volume
+# Persist rclone config and chroma cache on /data volume
 ENV RCLONE_CONFIG=/data/.config/rclone/rclone.conf
+ENV XDG_CACHE_HOME=/data/.cache
 
 ENV PORT=8080
 EXPOSE 8080
