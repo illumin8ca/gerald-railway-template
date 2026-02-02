@@ -1775,16 +1775,34 @@ async function setupDashboard(token) {
     ? dashboardRepo.replace('https://', `https://x-access-token:${token}@`)
     : dashboardRepo;
 
-  console.log('[dashboard] Cloning Gerald Dashboard...');
-
-  // Clone if not already present
+  // Clone if not present, otherwise pull latest
   if (!fs.existsSync(path.join(DASHBOARD_DIR, 'package.json'))) {
+    console.log('[dashboard] Cloning Gerald Dashboard...');
     fs.rmSync(DASHBOARD_DIR, { recursive: true, force: true });
     fs.mkdirSync(DASHBOARD_DIR, { recursive: true });
     const clone = await runCmd('git', ['clone', '--depth', '1', authUrl, DASHBOARD_DIR]);
     if (clone.code !== 0) {
       console.error('[dashboard] Clone failed:', clone.output);
       return { ok: false, output: clone.output };
+    }
+  } else {
+    // Pull latest changes
+    console.log('[dashboard] Updating Gerald Dashboard...');
+    // Update remote URL in case token changed
+    await runCmd('git', ['remote', 'set-url', 'origin', authUrl], { cwd: DASHBOARD_DIR });
+    const pull = await runCmd('git', ['pull', '--ff-only', 'origin', 'main'], { cwd: DASHBOARD_DIR });
+    if (pull.code !== 0) {
+      // If pull fails (diverged history from shallow clone), do a fresh clone
+      console.log('[dashboard] Pull failed, doing fresh clone...');
+      fs.rmSync(DASHBOARD_DIR, { recursive: true, force: true });
+      fs.mkdirSync(DASHBOARD_DIR, { recursive: true });
+      const clone = await runCmd('git', ['clone', '--depth', '1', authUrl, DASHBOARD_DIR]);
+      if (clone.code !== 0) {
+        console.error('[dashboard] Fresh clone failed:', clone.output);
+        return { ok: false, output: clone.output };
+      }
+    } else {
+      console.log('[dashboard] Updated:', pull.output.split('\n')[0]);
     }
   }
 
