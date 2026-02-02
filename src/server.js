@@ -1357,6 +1357,220 @@ async function createTurnstileWidget(domain, zoneId) {
   };
 }
 
+async function setupSendGridDomainAuth(domain, sendgridApiKey) {
+  const cfKey = process.env.CLOUDFLARE_API_KEY?.trim();
+  const cfEmail = process.env.CLOUDFLARE_EMAIL?.trim();
+  
+  if (!cfKey || !cfEmail) {
+    return { ok: false, output: '[sendgrid-domain] Cloudflare credentials not available' };
+  }
+
+  const sgHeaders = {
+    'Authorization': `Bearer ${sendgridApiKey}`,
+    'Content-Type': 'application/json',
+  };
+
+  const cfHeaders = {
+    'X-Auth-Email': cfEmail,
+    'X-Auth-Key': cfKey,
+    'Content-Type': 'application/json',
+  };
+
+  let output = '';
+
+  try {
+    // 1. Check if domain auth already exists
+    output += `[sendgrid-domain] Checking for existing domain authentication...\n`;
+    const existingDomainsRes = await fetch('https://api.sendgrid.com/v3/whitelabel/domains', {
+      headers: sgHeaders,
+    });
+    const existingDomains = await existingDomainsRes.json();
+    
+    let domainId = null;
+    let dnsRecords = null;
+
+    const existing = existingDomains.find(d => d.domain === domain);
+    if (existing) {
+      output += `[sendgrid-domain] Found existing domain auth (ID: ${existing.id})\n`;
+      domainId = existing.id;
+      dnsRecords = existing.dns;
+    } else {
+      // 2. Create domain authentication
+      output += `[sendgrid-domain] Creating domain authentication for ${domain}...\n`;
+      const createRes = await fetch('https://api.sendgrid.com/v3/whitelabel/domains', {
+        method: 'POST',
+        headers: sgHeaders,
+        body: JSON.stringify({
+          domain: domain,
+          automatic_security: true,
+          default: true,
+        }),
+      });
+
+      if (!createRes.ok) {
+        const errorText = await createRes.text();
+        return { ok: false, output: `[sendgrid-domain] Failed to create domain: ${errorText}` };
+      }
+
+      const createData = await createRes.json();
+      domainId = createData.id;
+      dnsRecords = createData.dns;
+      output += `[sendgrid-domain] Domain auth created (ID: ${domainId})\n`;
+    }
+
+    // 3. Get Cloudflare zone ID
+    output += `[sendgrid-domain] Looking up Cloudflare zone for ${domain}...\n`;
+    const zoneRes = await fetch(`https://api.cloudflare.com/client/v4/zones?name=${domain}`, {
+      headers: cfHeaders,
+    });
+    const zoneData = await zoneRes.json();
+
+    if (!zoneData.success || !zoneData.result?.length) {
+      return { ok: false, output: output + `[sendgrid-domain] Domain ${domain} not found in Cloudflare account\n` };
+    }
+
+    const zoneId = zoneData.result[0].id;
+    output += `[sendgrid-domain] Cloudflare zone found: ${zoneId}\n`;
+
+    // 4. Get existing DNS records
+    const existingDnsRes = await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records`, {
+      headers: cfHeaders,
+    });
+    const existingDnsData = await existingDnsRes.json();
+    const existingRecords = existingDnsData.result || [];
+
+    // 5. Create/update DNS records
+    const recordsToCreate = [
+      { key: 'mail_cname', record: dnsRecords.mail_cname },
+      { key: 'dkim1', record: dnsRecords.dkim1 },
+      { key: 'dkim2', record: dnsRecords.dkim2 },
+    ];
+
+    for (const { key, record } of recordsToCreate) {
+      if (!record) {
+        output += `[sendgrid-domain] Warning: ${key} record not provided by SendGrid\n`;
+        continue;
+      }
+
+      const existing = existingRecords.find(r => 
+        r.name === record.host && r.type.toUpperCase() === record.type.toUpperCase()
+      );
+
+      if (existing) {
+        // Update existing record
+        const updateRes = await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records/${existing.id}`, {
+          method: 'PUT',
+          headers: cfHeaders,
+          body: JSON.stringify({
+            type: record.type.toUpperCase(),
+            name: record.host,
+            content: record.data,
+            proxied: false, // CNAME records for email must not be proxied
+          }),
+        });
+        const updateData = await updateRes.json();
+        output += `[sendgrid-domain] Updated ${key}: ${record.host} → ${record.data} (${updateData.success ? 'OK' : 'FAILED'})\n`;
+      } else {
+        // Create new record
+        const createRes = await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records`, {
+          method: 'POST',
+          headers: cfHeaders,
+          body: JSON.stringify({
+            type: record.type.toUpperCase(),
+            name: record.host,
+            content: record.data,
+            proxied: false, // CNAME records for email must not be proxied
+          }),
+        });
+        const createData = await createRes.json();
+        output += `[sendgrid-domain] Created ${key}: ${record.host} → ${record.data} (${createData.success ? 'OK' : 'FAILED'})\n`;
+      }
+    }
+
+    // 6. Wait for DNS propagation and validate (retry loop)
+    output += `[sendgrid-domain] Waiting for DNS propagation...\n`;
+    let validated = false;
+    
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await sleep(5000); // Wait 5 seconds between attempts
+      
+      output += `[sendgrid-domain] Validation attempt ${attempt}/3...\n`;
+      const validateRes = await fetch(`https://api.sendgrid.com/v3/whitelabel/domains/${domainId}/validate`, {
+        method: 'POST',
+        headers: sgHeaders,
+      });
+
+      if (!validateRes.ok) {
+        const errorText = await validateRes.text();
+        output += `[sendgrid-domain] Validation attempt ${attempt} failed: ${errorText}\n`;
+        continue;
+      }
+
+      const validateData = await validateRes.json();
+      
+      if (validateData.valid) {
+        validated = true;
+        output += `[sendgrid-domain] ✓ Domain validation successful!\n`;
+        break;
+      } else {
+        output += `[sendgrid-domain] Validation pending (DNS may need more time to propagate)\n`;
+        if (validateData.validation_results) {
+          output += `[sendgrid-domain] Details: ${JSON.stringify(validateData.validation_results)}\n`;
+        }
+      }
+    }
+
+    if (!validated) {
+      output += `[sendgrid-domain] ⚠️  Domain not yet validated - DNS records created but may need more time to propagate\n`;
+    }
+
+    // 7. Register verified sender as backup
+    output += `[sendgrid-domain] Registering verified sender...\n`;
+    const senderEmail = `noreply@${domain}`;
+    
+    const verifiedSenderRes = await fetch('https://api.sendgrid.com/v3/verified_senders', {
+      method: 'POST',
+      headers: sgHeaders,
+      body: JSON.stringify({
+        nickname: 'Gerald Dashboard',
+        from_email: senderEmail,
+        from_name: 'Gerald Dashboard',
+        reply_to: senderEmail,
+        reply_to_name: 'Gerald Dashboard',
+        address: '123 Main St',
+        city: 'Edmonton',
+        state: 'AB',
+        zip: 'T5A0A1',
+        country: 'CA',
+      }),
+    });
+
+    if (verifiedSenderRes.ok) {
+      output += `[sendgrid-domain] ✓ Verified sender registered: ${senderEmail}\n`;
+    } else {
+      const errorText = await verifiedSenderRes.text();
+      // Don't fail if sender already exists
+      if (errorText.includes('already exists') || errorText.includes('duplicate')) {
+        output += `[sendgrid-domain] Verified sender already exists: ${senderEmail}\n`;
+      } else {
+        output += `[sendgrid-domain] ⚠️  Failed to register verified sender: ${errorText}\n`;
+      }
+    }
+
+    return {
+      ok: true,
+      validated,
+      output,
+    };
+
+  } catch (err) {
+    return {
+      ok: false,
+      output: output + `[sendgrid-domain] Error: ${err.message}\n`,
+    };
+  }
+}
+
 async function cloneAndBuild(repoUrl, branch, targetDir, token) {
   // Clean target dir
   fs.rmSync(targetDir, { recursive: true, force: true });
@@ -1918,6 +2132,16 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
           { mode: 0o600 }
         );
         extra += `\n[sendgrid] Configuration saved\n`;
+
+        // Auto-configure SendGrid domain authentication if client domain and Cloudflare are available
+        if (payload.clientDomain?.trim() && cfKey && cfEmail) {
+          extra += `\n[sendgrid-domain] Configuring SendGrid domain authentication...\n`;
+          const domainAuthResult = await setupSendGridDomainAuth(
+            payload.clientDomain.trim().toLowerCase(),
+            payload.sendgridApiKey.trim()
+          );
+          extra += domainAuthResult.output;
+        }
       }
 
       // ── Auth configuration ──────────────────────────────────────────────────
@@ -2152,6 +2376,44 @@ app.post('/api/rebuild-dashboard', requireSetupAuth, async (req, res) => {
     res.json({ ok: true, output: result.output + '\nDashboard restarted.' });
   } catch (err) {
     console.error('[rebuild-dashboard]', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// Manual SendGrid domain verification endpoint
+app.post('/api/verify-sendgrid-domain', requireSetupAuth, async (req, res) => {
+  try {
+    // Read config from saved files
+    const sendgridConfigPath = path.join(STATE_DIR, 'sendgrid.json');
+    const illumin8ConfigPath = path.join(STATE_DIR, 'illumin8.json');
+
+    if (!fs.existsSync(sendgridConfigPath)) {
+      return res.status(400).json({ ok: false, error: 'SendGrid not configured. Run setup first.' });
+    }
+
+    if (!fs.existsSync(illumin8ConfigPath)) {
+      return res.status(400).json({ ok: false, error: 'Client domain not configured. Run setup first.' });
+    }
+
+    const sendgridConfig = JSON.parse(fs.readFileSync(sendgridConfigPath, 'utf8'));
+    const illumin8Config = JSON.parse(fs.readFileSync(illumin8ConfigPath, 'utf8'));
+
+    const domain = illumin8Config.clientDomain;
+    const apiKey = sendgridConfig.apiKey;
+
+    if (!domain || !apiKey) {
+      return res.status(400).json({ ok: false, error: 'Missing domain or API key in configuration.' });
+    }
+
+    const result = await setupSendGridDomainAuth(domain, apiKey);
+    
+    res.json({
+      ok: result.ok,
+      validated: result.validated,
+      output: result.output,
+    });
+  } catch (err) {
+    console.error('[verify-sendgrid-domain]', err);
     res.status(500).json({ ok: false, error: String(err) });
   }
 });
