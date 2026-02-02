@@ -1309,6 +1309,10 @@ async function startDashboard() {
       JWT_SECRET: process.env.JWT_SECRET || dashboardJwtSecret,
       ALLOWED_TELEGRAM_IDS: process.env.ALLOWED_TELEGRAM_IDS || '511172388',
       TELEGRAM_BOT_ID: process.env.TELEGRAM_BOT_ID || '',
+      SENDGRID_API_KEY: process.env.SENDGRID_API_KEY || '',
+      SENDGRID_SENDER_EMAIL: process.env.SENDGRID_SENDER_EMAIL || '',
+      CLIENT_DOMAIN: process.env.CLIENT_DOMAIN || '',
+      ALLOWED_EMAILS: process.env.DEFAULT_ALLOWED_EMAILS || '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
