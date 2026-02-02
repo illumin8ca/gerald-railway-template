@@ -337,6 +337,43 @@ async function startGateway() {
     console.log(`[gateway] Model synced: ${envModel}`);
   }
 
+  // Sync Anthropic setup-token from env (persists Claude Max/Pro subscription through rebuilds)
+  const anthropicToken = process.env.ANTHROPIC_SETUP_TOKEN?.trim();
+  if (anthropicToken) {
+    const agentDir = path.join(STATE_DIR, 'agents', 'main', 'agent');
+    const authStorePath = path.join(agentDir, 'auth-profiles.json');
+    try {
+      fs.mkdirSync(agentDir, { recursive: true });
+      let store = { version: 1, profiles: {}, order: [], lastGood: {}, usageStats: {} };
+      if (fs.existsSync(authStorePath)) {
+        try { store = JSON.parse(fs.readFileSync(authStorePath, 'utf8')); } catch {}
+      }
+      // Upsert the anthropic token profile
+      const profileId = 'anthropic:default';
+      store.profiles[profileId] = {
+        credential: { type: 'token', provider: 'anthropic', token: anthropicToken },
+      };
+      if (!store.order?.includes(profileId)) {
+        store.order = store.order || [];
+        store.order.unshift(profileId);
+      }
+      store.lastGood = store.lastGood || {};
+      store.lastGood.anthropic = profileId;
+      fs.writeFileSync(authStorePath, JSON.stringify(store, null, 2), { mode: 0o600 });
+      console.log(`[gateway] Anthropic token synced from ANTHROPIC_SETUP_TOKEN env`);
+
+      // Also set the auth profile in config
+      await runCmd(OPENCLAW_NODE, clawArgs([
+        "config", "set", "auth.profiles.anthropic:default.provider", "anthropic",
+      ]));
+      await runCmd(OPENCLAW_NODE, clawArgs([
+        "config", "set", "auth.profiles.anthropic:default.mode", "token",
+      ]));
+    } catch (err) {
+      console.error(`[gateway] Failed to sync Anthropic token: ${err.message}`);
+    }
+  }
+
   console.log(`[gateway] Sync result: exit code ${syncResult.code}`);
   if (syncResult.output?.trim()) {
     console.log(`[gateway] Sync output: ${syncResult.output}`);
