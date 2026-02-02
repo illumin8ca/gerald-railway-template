@@ -999,20 +999,16 @@ app.get("/login", async (_req, res) => {
           <div id="telegramInfoMessage" class="message info hidden"></div>
           <div id="telegramErrorMessage" class="message error hidden"></div>
 
-          <!-- Primary: Telegram Login Widget -->
-          <div id="widgetSection">
-            <p style="font-size: 14px; color: #94a3b8; margin-bottom: 20px; text-align: center;">
-              Sign in with your Telegram account
-            </p>
-            <div style="display: flex; justify-content: center; margin-bottom: 20px;">
-              <script async src="https://telegram.org/js/telegram-widget.js?22" 
-                data-telegram-login="${botUsername}" 
-                data-size="large" 
-                data-onauth="onTelegramAuth(user)" 
-                data-request-access="write"></script>
-            </div>
-            
-                      </div>
+          <p style="font-size: 14px; color: #94a3b8; margin-bottom: 24px; text-align: center;">
+            Sign in with your Telegram account
+          </p>
+          
+          <button type="button" onclick="telegramLogin()" style="display: flex; align-items: center; justify-content: center; gap: 12px;">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.562 8.161l-1.84 8.673c-.138.613-.5.76-1.013.473l-2.8-2.066-1.35 1.3c-.15.15-.275.275-.563.275l.2-2.84 5.16-4.66c.225-.2-.05-.31-.35-.11l-6.373 4.013-2.75-.863c-.6-.187-.612-.6.125-.89l10.75-4.145c.5-.187.937.11.775.89z"/>
+            </svg>
+            Sign in with Telegram
+          </button>
         </div>
         ` : ''}
         
@@ -1088,48 +1084,12 @@ app.get("/login", async (_req, res) => {
           }
         });
 
-        // Telegram Login Widget callback
-        window.onTelegramAuth = function(user) {
-          const telegramErrorMessage = document.getElementById('telegramErrorMessage');
-          const telegramSuccessMessage = document.getElementById('telegramSuccessMessage');
-          
-          if (telegramErrorMessage) telegramErrorMessage.classList.add('hidden');
-          if (telegramSuccessMessage) {
-            telegramSuccessMessage.textContent = '✓ Authenticated! Redirecting...';
-            telegramSuccessMessage.classList.remove('hidden');
-          }
-          
-          fetch('/api/auth/telegram/widget', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(user)
-          })
-          .then(r => r.json())
-          .then(data => {
-            if (data.redirect) {
-              window.location.href = data.redirect;
-            } else if (data.error) {
-              if (telegramErrorMessage) {
-                telegramErrorMessage.textContent = data.error;
-                telegramErrorMessage.classList.remove('hidden');
-              }
-              if (telegramSuccessMessage) {
-                telegramSuccessMessage.classList.add('hidden');
-              }
-            }
-          })
-          .catch(err => {
-            if (telegramErrorMessage) {
-              telegramErrorMessage.textContent = 'Authentication failed. Please try again.';
-              telegramErrorMessage.classList.remove('hidden');
-            }
-            if (telegramSuccessMessage) {
-              telegramSuccessMessage.classList.add('hidden');
-            }
-          });
-        };
-
-                // (6-digit code flow removed — Telegram Login Widget only)
+        // Telegram login redirect to central auth
+        function telegramLogin() {
+          const botUsername = '${botUsername}';
+          const returnUrl = encodeURIComponent(window.location.origin + '/api/auth/telegram/callback');
+          window.location.href = 'https://auth.illumin8.ca?return_url=' + returnUrl + '&bot=' + botUsername;
+        }
       </script>
     </body>
     </html>
@@ -1234,89 +1194,62 @@ app.get("/api/auth/verify", async (req, res) => {
 
 // ── Telegram Code Authentication ──────────────────────────────────────────
 
-// Verify Telegram Login Widget callback
-app.post("/api/auth/telegram/widget", async (req, res) => {
+// Telegram callback from centralized auth service (auth.illumin8.ca)
+app.get("/api/auth/telegram/callback", async (req, res) => {
   try {
-    const data = req.body;
+    const { tg_auth } = req.query;
+    if (!tg_auth) return res.redirect('/login?error=invalid');
     
-    // Get bot token from config
-    const cfgPath = configPath();
-    if (!fs.existsSync(cfgPath)) {
-      return res.status(500).json({ error: "OpenClaw not configured" });
-    }
+    // Decode base64
+    const authData = JSON.parse(Buffer.from(tg_auth, 'base64').toString());
     
-    const config = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+    // Verify Telegram HMAC hash using bot token from OpenClaw config
+    const config = JSON.parse(fs.readFileSync(configPath(), 'utf8'));
     const botToken = config?.channels?.telegram?.botToken;
-    if (!botToken) {
-      return res.status(500).json({ error: "Telegram bot not configured" });
+    if (!botToken) return res.redirect('/login?error=invalid');
+    
+    if (!verifyTelegramWidget(authData, botToken)) {
+      return res.redirect('/login?error=invalid');
     }
     
-    // Verify the widget data
-    if (!verifyTelegramWidget(data, botToken)) {
-      return res.status(401).json({ error: "Invalid authentication data" });
+    // Check auth_date not too old (1 hour)
+    const authDate = parseInt(authData.auth_date);
+    const now = Math.floor(Date.now() / 1000);
+    if (now - authDate > 3600) {
+      return res.redirect('/login?error=expired');
     }
     
-    // Check auth_date is not too old (within 1 hour)
-    const authDate = parseInt(data.auth_date);
-    if (!authDate || Date.now() / 1000 - authDate > 3600) {
-      return res.status(401).json({ error: "Authentication expired" });
-    }
-    
-    // For now, allow any verified Telegram user
-    // Later can add allowedTelegramIds check here
-    
-    // Use the first allowed email for the session
-    const authConfig = getAuthConfig();
-    const email = authConfig.allowedEmails?.[0];
-    if (!email) {
-      return res.status(500).json({ error: "No allowed emails configured" });
-    }
-    
-    // Create session
+    // Auth verified! Create wrapper session
+    const email = getAuthConfig().allowedEmails?.[0] || authData.username || 'telegram-user';
     const sessionId = createSession(email);
     
-    // Set session cookie
     res.cookie("gerald_session", sessionId, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      maxAge: 72 * 60 * 60 * 1000, // 72 hours
+      maxAge: 72 * 60 * 60 * 1000,
     });
     
-    // Bridge to dashboard (same logic as magic link verify)
+    // Bridge to dashboard
     try {
-      console.log('[telegram-widget] Generating dashboard magic code');
       const dashRes = await fetch(`${DASHBOARD_TARGET}/api/auth/magic/generate`, {
         method: 'POST',
         headers: { 'X-Api-Key': INTERNAL_API_KEY, 'Content-Type': 'application/json' }
       });
-      
       if (dashRes.ok) {
-        const dashData = await dashRes.json();
-        console.log('[telegram-widget] Dashboard magic code generated');
-        // Return redirect URL for client-side redirect
-        return res.json({ 
-          success: true,
-          redirect: `/api/auth/magic/${dashData.code}`
-        });
-      } else {
-        const body = await dashRes.text();
-        console.error('[telegram-widget] Dashboard magic generate failed:', dashRes.status, body);
-        // Fallback: just return success without dashboard bridge
-        return res.json({ success: true, redirect: '/' });
+        const data = await dashRes.json();
+        return res.redirect(`/api/auth/magic/${data.code}`);
       }
-    } catch (dashErr) {
-      console.error('[telegram-widget] Dashboard magic auth failed:', dashErr.message || dashErr);
-      // Fallback: just return success without dashboard bridge
-      return res.json({ success: true, redirect: '/' });
+    } catch (e) {
+      console.error('[telegram-auth] Dashboard bridge failed:', e.message);
     }
+    
+    res.redirect('/');
   } catch (err) {
-    console.error("[telegram-widget] Error:", err);
-    res.status(500).json({ error: "Internal server error" });
+    console.error('[telegram-auth] Callback error:', err);
+    res.redirect('/login?error=invalid');
   }
 });
-
-// (6-digit code endpoints removed — using Telegram Login Widget instead)
 
 // Logout
 app.get("/api/auth/logout", (req, res) => {
