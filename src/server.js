@@ -74,6 +74,16 @@ const WORKSPACE_DIR =
 // ── Auth Management ───────────────────────────────────────────────────────
 // Magic link authentication with SendGrid
 
+function parseCookiesFromString(cookieStr) {
+  const cookies = {};
+  if (!cookieStr) return cookies;
+  cookieStr.split(';').forEach(pair => {
+    const [key, ...val] = pair.trim().split('=');
+    if (key) cookies[key] = decodeURIComponent(val.join('='));
+  });
+  return cookies;
+}
+
 function getAuthConfig() {
   try {
     const authPath = path.join(STATE_DIR, "auth.json");
@@ -978,7 +988,10 @@ app.get("/api/auth/verify", (req, res) => {
     });
 
     // Redirect to dashboard (or to the redirect parameter)
-    const redirect = req.query.redirect || "/";
+    let redirect = req.query.redirect || "/";
+    if (!redirect.startsWith("/") || redirect.startsWith("//")) {
+      redirect = "/";
+    }
     res.redirect(redirect);
   } catch (err) {
     console.error("[auth] Error in /api/auth/verify:", err);
@@ -1385,7 +1398,14 @@ async function setupSendGridDomainAuth(domain, sendgridApiKey) {
     const existingDomainsRes = await fetch('https://api.sendgrid.com/v3/whitelabel/domains', {
       headers: sgHeaders,
     });
+    if (!existingDomainsRes.ok) {
+      const errText = await existingDomainsRes.text();
+      return { ok: false, output: `SendGrid API error (${existingDomainsRes.status}): ${errText}` };
+    }
     const existingDomains = await existingDomainsRes.json();
+    if (!Array.isArray(existingDomains)) {
+      return { ok: false, output: `SendGrid API returned unexpected response: ${JSON.stringify(existingDomains)}` };
+    }
     
     let domainId = null;
     let dnsRecords = null;
@@ -1410,7 +1430,7 @@ async function setupSendGridDomainAuth(domain, sendgridApiKey) {
 
       if (!createRes.ok) {
         const errorText = await createRes.text();
-        return { ok: false, output: `[sendgrid-domain] Failed to create domain: ${errorText}` };
+        return { ok: false, output: output + `[sendgrid-domain] Failed to create domain: ${errorText}` };
       }
 
       const createData = await createRes.json();
@@ -1424,6 +1444,10 @@ async function setupSendGridDomainAuth(domain, sendgridApiKey) {
     const zoneRes = await fetch(`https://api.cloudflare.com/client/v4/zones?name=${domain}`, {
       headers: cfHeaders,
     });
+    if (!zoneRes.ok) {
+      const errText = await zoneRes.text();
+      return { ok: false, output: output + `[sendgrid-domain] Cloudflare API error (${zoneRes.status}): ${errText}\n` };
+    }
     const zoneData = await zoneRes.json();
 
     if (!zoneData.success || !zoneData.result?.length) {
@@ -1437,6 +1461,10 @@ async function setupSendGridDomainAuth(domain, sendgridApiKey) {
     const existingDnsRes = await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records`, {
       headers: cfHeaders,
     });
+    if (!existingDnsRes.ok) {
+      const errText = await existingDnsRes.text();
+      return { ok: false, output: output + `[sendgrid-domain] Failed to fetch DNS records (${existingDnsRes.status}): ${errText}\n` };
+    }
     const existingDnsData = await existingDnsRes.json();
     const existingRecords = existingDnsData.result || [];
 
@@ -1503,7 +1531,7 @@ async function setupSendGridDomainAuth(domain, sendgridApiKey) {
 
       if (!validateRes.ok) {
         const errorText = await validateRes.text();
-        output += `[sendgrid-domain] Validation attempt ${attempt} failed: ${errorText}\n`;
+        output += `[sendgrid-domain] Validation API error (${validateRes.status}): ${errorText}\n`;
         continue;
       }
 
@@ -1554,7 +1582,7 @@ async function setupSendGridDomainAuth(domain, sendgridApiKey) {
       if (errorText.includes('already exists') || errorText.includes('duplicate')) {
         output += `[sendgrid-domain] Verified sender already exists: ${senderEmail}\n`;
       } else {
-        output += `[sendgrid-domain] ⚠️  Failed to register verified sender: ${errorText}\n`;
+        output += `[sendgrid-domain] ⚠️  Failed to register verified sender (${verifiedSenderRes.status}): ${errorText}\n`;
       }
     }
 
@@ -2544,7 +2572,7 @@ proxy.on("proxyReqWs", (proxyReq, req, socket, options, head) => {
   console.log(`[proxy-event] Headers:`, JSON.stringify(proxyReq.getHeaders()));
 });
 
-app.use(async (req, res) => {
+app.use(async (req, res, next) => {
   // If not configured, force users to /setup for any non-setup routes.
   if (!isConfigured() && !req.path.startsWith("/setup")) {
     return res.redirect("/setup");
@@ -2668,6 +2696,23 @@ server.on("upgrade", async (req, socket, head) => {
     } catch {
       socket.destroy();
       return;
+    }
+
+    // Check session auth for gerald subdomain WebSocket upgrades
+    if (clientDomain && wsHost === `gerald.${clientDomain}`) {
+      const cookies = parseCookiesFromString(req.headers.cookie || '');
+      const sessionId = cookies.gerald_session;
+      if (!sessionId) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      const session = getSession(sessionId);
+      if (!session) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
+        return;
+      }
     }
 
     console.log(`[ws-upgrade] Proxying WebSocket to gateway: ${req.url}`);
