@@ -745,7 +745,7 @@ app.get("/login", async (_req, res) => {
     : "";
 
   // Get bot username for Telegram Login Widget
-  const botUsername = await getTelegramBotUsername();
+  const botUsername = await getTelegramBotUsername() || process.env.TELEGRAM_BOT_USERNAME?.trim() || null;
 
   res.set("Cache-Control", "no-cache, no-store, must-revalidate");
   res.type("text/html");
@@ -963,7 +963,7 @@ app.get("/login", async (_req, res) => {
 
         <div class="tabs">
           <button type="button" class="tab active" data-tab="email">Email</button>
-          ${botUsername ? '<button type="button" class="tab" data-tab="telegram">Telegram</button>' : ''}
+          <button type="button" class="tab" data-tab="telegram">Telegram</button>
         </div>
 
         <!-- Email Tab -->
@@ -993,7 +993,6 @@ app.get("/login", async (_req, res) => {
         </div>
 
         <!-- Telegram Tab -->
-        ${botUsername ? `
         <div id="telegram-tab" class="tab-content">
           <div id="telegramSuccessMessage" class="message success hidden"></div>
           <div id="telegramInfoMessage" class="message info hidden"></div>
@@ -1010,7 +1009,6 @@ app.get("/login", async (_req, res) => {
             Sign in with Telegram
           </button>
         </div>
-        ` : ''}
         
 
         <div class="footer">
@@ -1086,7 +1084,15 @@ app.get("/login", async (_req, res) => {
 
         // Telegram login redirect to central auth
         function telegramLogin() {
-          const botUsername = '${botUsername}';
+          const botUsername = '${botUsername || ''}';
+          if (!botUsername) {
+            var errEl = document.getElementById('telegramErrorMessage');
+            if (errEl) {
+              errEl.textContent = 'Telegram bot not configured yet. Complete setup first, or use email login.';
+              errEl.classList.remove('hidden');
+            }
+            return;
+          }
           const returnUrl = encodeURIComponent(window.location.origin + '/api/auth/telegram/callback');
           window.location.href = 'https://auth.illumin8.ca?return_url=' + returnUrl + '&bot=' + botUsername;
         }
