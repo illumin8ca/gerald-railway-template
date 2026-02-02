@@ -131,6 +131,11 @@ const SITE_DIR = path.join(WORKSPACE_DIR, 'site');
 const PRODUCTION_DIR = path.join(SITE_DIR, 'production');
 const DEV_DIR = path.join(SITE_DIR, 'dev');
 
+// Dev server
+const DEV_SERVER_PORT = 4321;
+const DEV_SERVER_TARGET = `http://127.0.0.1:${DEV_SERVER_PORT}`;
+let devServerProcess = null;
+
 // Gerald Dashboard
 const DASHBOARD_PORT = 3003;
 const DASHBOARD_TARGET = `http://127.0.0.1:${DASHBOARD_PORT}`;
@@ -1211,6 +1216,103 @@ async function cloneAndBuild(repoUrl, branch, targetDir, token) {
   return { ok: true, output: `Cloned static site from ${branch} branch` };
 }
 
+// ── Dev server lifecycle ──────────────────────────────────────────────
+async function startDevServer() {
+  if (devServerProcess) return;
+  if (!fs.existsSync(path.join(DEV_DIR, 'package.json'))) {
+    console.log('[dev-server] No package.json in dev dir, skipping');
+    return;
+  }
+
+  console.log(`[dev-server] Starting on port ${DEV_SERVER_PORT}...`);
+
+  // Install deps if needed
+  if (!fs.existsSync(path.join(DEV_DIR, 'node_modules'))) {
+    console.log('[dev-server] Installing dependencies...');
+    await runCmd('npm', ['install'], { cwd: DEV_DIR });
+  }
+
+  devServerProcess = childProcess.spawn('npx', ['astro', 'dev', '--host', '0.0.0.0', '--port', String(DEV_SERVER_PORT)], {
+    cwd: DEV_DIR,
+    env: {
+      ...process.env,
+      PORT: String(DEV_SERVER_PORT),
+      HOST: '0.0.0.0',
+      NODE_ENV: 'development',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  devServerProcess.stdout.on('data', (d) => console.log('[dev-server]', d.toString().trim()));
+  devServerProcess.stderr.on('data', (d) => console.error('[dev-server]', d.toString().trim()));
+  devServerProcess.on('close', (code) => {
+    console.log('[dev-server] Process exited with code', code);
+    devServerProcess = null;
+  });
+
+  // Wait for it to be ready
+  for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, 1000));
+    try {
+      const res = await fetch(`http://127.0.0.1:${DEV_SERVER_PORT}/`);
+      if (res.ok || res.status === 304) {
+        console.log('[dev-server] Ready');
+        return;
+      }
+    } catch {}
+  }
+  console.warn('[dev-server] Timed out waiting for dev server to start');
+}
+
+function stopDevServer() {
+  if (!devServerProcess) return;
+  console.log('[dev-server] Stopping...');
+  devServerProcess.kill('SIGTERM');
+  devServerProcess = null;
+}
+
+async function restartDevServer() {
+  stopDevServer();
+  await new Promise(r => setTimeout(r, 1000));
+  await startDevServer();
+}
+
+// Pull latest code for dev branch (used by webhook — no full rebuild needed)
+async function pullDevBranch() {
+  const githubConfigPath = path.join(STATE_DIR, 'github.json');
+  if (!fs.existsSync(githubConfigPath)) return { ok: false, output: 'No github config' };
+
+  const githubConfig = JSON.parse(fs.readFileSync(githubConfigPath, 'utf8'));
+  const token = githubConfig.token || process.env.GITHUB_TOKEN?.trim() || '';
+  const repoUrl = `https://github.com/${githubConfig.repo}`;
+  const authUrl = token ? repoUrl.replace('https://', `https://x-access-token:${token}@`) : repoUrl;
+
+  // If DEV_DIR has a .git, just pull. Otherwise clone fresh.
+  if (fs.existsSync(path.join(DEV_DIR, '.git'))) {
+    console.log('[dev-server] Pulling latest changes...');
+    await runCmd('git', ['remote', 'set-url', 'origin', authUrl], { cwd: DEV_DIR });
+    const pull = await runCmd('git', ['pull', '--ff-only', 'origin', githubConfig.devBranch], { cwd: DEV_DIR });
+    if (pull.code !== 0) {
+      // Pull failed — do a hard reset
+      console.log('[dev-server] Pull failed, doing hard reset...');
+      await runCmd('git', ['fetch', 'origin', githubConfig.devBranch], { cwd: DEV_DIR });
+      await runCmd('git', ['reset', '--hard', `origin/${githubConfig.devBranch}`], { cwd: DEV_DIR });
+    }
+    // Reinstall deps if package.json changed
+    await runCmd('npm', ['install'], { cwd: DEV_DIR });
+    return { ok: true, output: 'Pulled and updated' };
+  } else {
+    // Fresh clone
+    console.log('[dev-server] Fresh clone for dev server...');
+    fs.rmSync(DEV_DIR, { recursive: true, force: true });
+    fs.mkdirSync(DEV_DIR, { recursive: true });
+    const clone = await runCmd('git', ['clone', '--branch', githubConfig.devBranch, authUrl, DEV_DIR]);
+    if (clone.code !== 0) return { ok: false, output: clone.output };
+    await runCmd('npm', ['install'], { cwd: DEV_DIR });
+    return { ok: true, output: 'Cloned fresh' };
+  }
+}
+
 // ── Gerald Dashboard setup & lifecycle ────────────────────────────────
 async function setupDashboard(token) {
   // Fall back to saved GitHub token if none provided
@@ -1808,10 +1910,18 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
         const prodResult = await cloneAndBuild(repoUrl, prodBranch, PRODUCTION_DIR, token);
         extra += `[build] Production: ${prodResult.output}\n`;
 
-        // Build development
-        extra += `[build] Building dev site from ${devBranch}...\n`;
+        // Clone development branch and start dev server
+        extra += `[build] Cloning dev branch (${devBranch}) for live dev server...\n`;
         const devResult = await cloneAndBuild(repoUrl, devBranch, DEV_DIR, token);
         extra += `[build] Dev: ${devResult.output}\n`;
+        
+        // Start dev server
+        try {
+          await startDevServer();
+          extra += `[dev-server] ✓ Live dev server started on port ${DEV_SERVER_PORT}\n`;
+        } catch (err) {
+          extra += `[dev-server] ⚠️ Failed to start dev server: ${err.message}\n`;
+        }
 
         // Auto-register GitHub webhook for push events (auto-rebuild on push)
         if (token && payload.clientDomain?.trim()) {
@@ -1983,8 +2093,15 @@ app.post('/api/rebuild', requireSetupAuth, async (req, res) => {
     }
 
     if (target === 'dev' || target === 'both') {
-      const result = await cloneAndBuild(repoUrl, githubConfig.devBranch, DEV_DIR, token);
+      const result = await pullDevBranch();
       output += `Dev (${githubConfig.devBranch}): ${result.output}\n`;
+      if (devServerProcess) {
+        await restartDevServer();
+        output += 'Dev server restarted.\n';
+      } else {
+        await startDevServer();
+        output += 'Dev server started.\n';
+      }
     }
 
     res.json({ ok: true, output });
@@ -2086,8 +2203,14 @@ app.post('/api/webhook/github', express.json(), async (req, res) => {
     }
 
     if (branch === githubConfig.devBranch) {
-      console.log(`[webhook] Rebuilding dev...`);
-      const result = await cloneAndBuild(repoUrl, branch, DEV_DIR, token);
+      console.log(`[webhook] Updating dev server...`);
+      const result = await pullDevBranch();
+      // Restart dev server if it was running, or start it
+      if (devServerProcess) {
+        await restartDevServer();
+      } else {
+        await startDevServer();
+      }
       return res.json({ ok: true, target: 'dev', output: result.output });
     }
 
@@ -2209,9 +2332,14 @@ app.use(async (req, res, next) => {
       return serveStaticSite(PRODUCTION_DIR, req, res);
     }
 
-    // Dev site: dev.clientdomain.com
+    // Dev site: dev.clientdomain.com → live dev server (or static fallback)
     if (host === `dev.${clientDomain}`) {
       res.set('X-Robots-Tag', 'noindex, nofollow');
+      if (devServerProcess) {
+        req._proxyTarget = 'dashboard'; // skip gateway token injection
+        return proxy.web(req, res, { target: DEV_SERVER_TARGET });
+      }
+      // Fallback to static files if dev server isn't running
       return serveStaticSite(DEV_DIR, req, res);
     }
 
@@ -2271,6 +2399,11 @@ const server = app.listen(PORT, async () => {
 
   // Start dashboard if installed
   startDashboard().catch(err => console.error('[dashboard] Auto-start failed:', err));
+
+  // Start dev server if dev site has been cloned
+  if (fs.existsSync(path.join(DEV_DIR, 'package.json'))) {
+    startDevServer().catch(err => console.error('[dev-server] Auto-start failed:', err));
+  }
 });
 
 // Handle WebSocket upgrades
@@ -2280,9 +2413,18 @@ server.on("upgrade", async (req, socket, head) => {
     return;
   }
 
-  // Only proxy WebSocket for gerald subdomain or when no client domain is set
+  // Route WebSocket by subdomain
   const clientDomain = getClientDomain();
   const wsHost = req.headers.host?.split(':')[0]?.toLowerCase();
+
+  // Dev subdomain WebSocket → dev server (HMR)
+  if (clientDomain && wsHost === `dev.${clientDomain}` && devServerProcess) {
+    console.log(`[ws-upgrade] Proxying WebSocket to dev server: ${req.url}`);
+    proxy.ws(req, socket, head, { target: DEV_SERVER_TARGET });
+    return;
+  }
+
+  // Only allow WebSocket for gerald subdomain (or no client domain set)
   if (clientDomain && wsHost !== `gerald.${clientDomain}`) {
     socket.destroy();
     return;
@@ -2333,6 +2475,11 @@ process.on("SIGTERM", () => {
   }
   try {
     if (dashboardProcess) dashboardProcess.kill("SIGTERM");
+  } catch {
+    // ignore
+  }
+  try {
+    if (devServerProcess) devServerProcess.kill("SIGTERM");
   } catch {
     // ignore
   }
