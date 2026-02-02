@@ -1844,6 +1844,17 @@ async function startDashboard() {
   }
 
   console.log('[dashboard] Starting on port ' + DASHBOARD_PORT);
+  // Generate a stable JWT secret for the dashboard (persist in state dir)
+  const jwtSecretPath = path.join(STATE_DIR, 'dashboard-jwt-secret');
+  let dashboardJwtSecret;
+  if (fs.existsSync(jwtSecretPath)) {
+    dashboardJwtSecret = fs.readFileSync(jwtSecretPath, 'utf8').trim();
+  } else {
+    dashboardJwtSecret = crypto.randomBytes(32).toString('hex');
+    fs.writeFileSync(jwtSecretPath, dashboardJwtSecret, { mode: 0o600 });
+    console.log('[dashboard] Generated new JWT secret');
+  }
+
   dashboardProcess = childProcess.spawn('node', ['server/index.js'], {
     cwd: DASHBOARD_DIR,
     env: {
@@ -1853,6 +1864,8 @@ async function startDashboard() {
       OPENCLAW_GATEWAY_URL: GATEWAY_TARGET,
       OPENCLAW_GATEWAY_TOKEN: OPENCLAW_GATEWAY_TOKEN,
       INTERNAL_API_KEY: INTERNAL_API_KEY,
+      JWT_SECRET: process.env.JWT_SECRET || dashboardJwtSecret,
+      ALLOWED_TELEGRAM_IDS: process.env.ALLOWED_TELEGRAM_IDS || '511172388',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
