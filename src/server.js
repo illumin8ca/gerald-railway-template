@@ -2165,6 +2165,130 @@ app.post('/setup/api/codex/disconnect', requireSetupAuth, async (req, res) => {
 });
 
 // ==============================
+// Dashboard-Compatible Codex Routes (Device Code Flow)
+// ==============================
+// These bridge the Dashboard's expected OAuth-style endpoints to the device code flow
+
+app.post('/api/model-settings/openai-codex/start-oauth', requireSetupAuth, async (req, res) => {
+  try {
+    console.log('[codex-bridge] Starting device code flow for Dashboard...');
+    
+    // Use the Codex CLI device code flow
+    const { stdout, stderr } = await new Promise((resolve, reject) => {
+      const proc = child_process.spawn('codex', ['login', '--device-auth'], {
+        env: { ...process.env, HOME: '/data', CODEX_HOME: '/data/.codex' },
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+
+      let stdoutData = '';
+      let stderrData = '';
+
+      proc.stdout.on('data', (data) => {
+        stdoutData += data.toString();
+      });
+
+      proc.stderr.on('data', (data) => {
+        stderrData += data.toString();
+      });
+
+      proc.on('close', (code) => {
+        resolve({ stdout: stdoutData, stderr: stderrData, code });
+      });
+
+      proc.on('error', (err) => {
+        reject(err);
+      });
+
+      // Kill after 15 seconds if it hangs
+      setTimeout(() => {
+        proc.kill();
+        reject(new Error('Codex login timeout'));
+      }, 15000);
+    });
+
+    // Parse the output for device code and verification URL
+    const output = stdout + stderr;
+    console.log('[codex-bridge] Raw output:', output);
+    
+    // Try multiple patterns for different Codex CLI versions
+    const urlPatterns = [
+      /Visit\s+(https:\/\/[^\s]+)/i,
+      /(https:\/\/chatgpt\.com\/device)/i,
+      /(https:\/\/[^\s]+device[^\s]*)/i
+    ];
+    
+    const codePatterns = [
+      /code:\s*([A-Z0-9-]+)/i,
+      /enter code\s*[:\s]+([A-Z0-9-]+)/i,
+      /code\s+([A-Z0-9-]{4,})/i
+    ];
+    
+    let url = null;
+    let userCode = null;
+    
+    for (const pattern of urlPatterns) {
+      const match = output.match(pattern);
+      if (match) {
+        url = match[1];
+        break;
+      }
+    }
+    
+    for (const pattern of codePatterns) {
+      const match = output.match(pattern);
+      if (match) {
+        userCode = match[1];
+        break;
+      }
+    }
+
+    if (!url || !userCode) {
+      console.error('[codex-bridge] Could not parse device code. Output:', output);
+      return res.status(500).json({ 
+        error: 'Failed to parse device code from Codex CLI',
+        rawOutput: output
+      });
+    }
+
+    // Return in a format the Dashboard expects (similar to OAuth URL)
+    res.json({ 
+      url: `${url}?code=${userCode}`,
+      deviceCode: userCode,
+      verificationUri: url,
+      message: `Visit ${url} and enter code: ${userCode}`
+    });
+    
+  } catch (err) {
+    console.error('[codex-bridge] start-oauth error:', err);
+    res.status(500).json({ error: 'Failed to start device code flow: ' + err.message });
+  }
+});
+
+app.get('/api/model-settings/openai-codex/check-oauth', requireSetupAuth, async (req, res) => {
+  try {
+    const authPath = path.join('/data/.codex', 'auth.json');
+    
+    if (!fs.existsSync(authPath)) {
+      return res.json({ authenticated: false });
+    }
+
+    const authData = JSON.parse(fs.readFileSync(authPath, 'utf8'));
+    
+    if (authData.access_token || authData.token) {
+      return res.json({ 
+        authenticated: true,
+        message: 'Authenticated with OpenAI Codex'
+      });
+    }
+
+    res.json({ authenticated: false });
+  } catch (err) {
+    console.error('[codex-bridge] check-oauth error:', err);
+    res.json({ authenticated: false, error: err.message });
+  }
+});
+
+// ==============================
 // Claude Code CLI Authentication
 // ==============================
 // Note: Claude Code does not support device code flow.
