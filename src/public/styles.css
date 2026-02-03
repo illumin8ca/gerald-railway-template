@@ -666,6 +666,30 @@ code {
   }
 }
 
+/* GitHub OAuth User Code Display */
+.user-code {
+  font-size: 2rem;
+  font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', 'Droid Sans Mono', 'Source Code Pro', monospace;
+  font-weight: bold;
+  letter-spacing: 0.3em;
+  padding: 1.5rem 2rem;
+  background: rgba(0, 255, 135, 0.1);
+  border: 2px solid var(--accent-primary);
+  border-radius: var(--radius-input);
+  margin: 1rem 0;
+  text-align: center;
+  color: var(--accent-primary);
+  user-select: all;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.user-code:hover {
+  background: rgba(0, 255, 135, 0.15);
+  border-color: var(--accent-primary);
+  transform: scale(1.02);
+}
+
 /* Print Styles */
 @media print {
   body {

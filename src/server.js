@@ -1384,7 +1384,7 @@ async function pullDevBranch() {
   if (!fs.existsSync(githubConfigPath)) return { ok: false, output: 'No github config' };
 
   const githubConfig = JSON.parse(fs.readFileSync(githubConfigPath, 'utf8'));
-  const token = githubConfig.token || process.env.GITHUB_TOKEN?.trim() || '';
+  const token = getGitHubToken();
   const repoUrl = `https://github.com/${githubConfig.repo}`;
   const authUrl = token ? repoUrl.replace('https://', `https://x-access-token:${token}@`) : repoUrl;
 
@@ -1416,15 +1416,9 @@ async function pullDevBranch() {
 
 // ── Gerald Dashboard setup & lifecycle ────────────────────────────────
 async function setupDashboard(token) {
-  // Fall back to saved GitHub token if none provided
+  // Fall back to OAuth or saved GitHub token if none provided
   if (!token) {
-    try {
-      const githubConfig = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'github.json'), 'utf8'));
-      token = githubConfig.token || '';
-    } catch {}
-  }
-  if (!token) {
-    token = process.env.GITHUB_TOKEN?.trim() || '';
+    token = getGitHubToken();
   }
 
   const dashboardRepo = 'https://github.com/illumin8ca/gerald-dashboard';
@@ -1568,6 +1562,234 @@ async function startDashboard() {
   }
   console.error('[dashboard] Failed to start within 30s');
 }
+
+// ── GitHub OAuth Device Flow Endpoints ────────────────────────────────
+const GITHUB_CLIENT_ID = 'Ov23lihLeOlzBtN5di4E';
+const GITHUB_CLIENT_SECRET = 'c593ee8eaeae73a1dca655bad285e7a2ff657261';
+
+// Helper to get GitHub token (OAuth or manual)
+function getGitHubToken() {
+  // First check OAuth token
+  const oauthPath = path.join(STATE_DIR, 'github-oauth.json');
+  if (fs.existsSync(oauthPath)) {
+    try {
+      const oauth = JSON.parse(fs.readFileSync(oauthPath, 'utf8'));
+      if (oauth.access_token) return oauth.access_token;
+    } catch {}
+  }
+  
+  // Fall back to manual token
+  const configPath = path.join(STATE_DIR, 'github.json');
+  if (fs.existsSync(configPath)) {
+    try {
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      if (config.token) return config.token;
+    } catch {}
+  }
+  
+  // Fall back to env var
+  return process.env.GITHUB_TOKEN?.trim() || '';
+}
+
+app.post('/setup/api/github/start-auth', requireSetupAuth, async (req, res) => {
+  try {
+    const response = await fetch('https://github.com/login/device/code', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({
+        client_id: GITHUB_CLIENT_ID,
+        scope: 'repo read:user'
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return res.status(response.status).json({ 
+        ok: false, 
+        error: `GitHub API error: ${errorText}` 
+      });
+    }
+
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    console.error('[github-auth] start-auth error:', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+app.post('/setup/api/github/poll-auth', requireSetupAuth, async (req, res) => {
+  try {
+    const { device_code } = req.body || {};
+    if (!device_code) {
+      return res.status(400).json({ ok: false, error: 'Missing device_code' });
+    }
+
+    const response = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({
+        client_id: GITHUB_CLIENT_ID,
+        device_code: device_code,
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code'
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return res.status(response.status).json({ 
+        ok: false, 
+        error: `GitHub API error: ${errorText}` 
+      });
+    }
+
+    const data = await response.json();
+
+    // Check for errors
+    if (data.error) {
+      if (data.error === 'authorization_pending') {
+        return res.json({ status: 'pending' });
+      }
+      return res.json({ status: 'error', error: data.error });
+    }
+
+    // Success - fetch username
+    const access_token = data.access_token;
+    const userRes = await fetch('https://api.github.com/user', {
+      headers: { 'Authorization': `Bearer ${access_token}` }
+    });
+
+    if (!userRes.ok) {
+      return res.json({ 
+        status: 'error', 
+        error: 'Failed to fetch user info' 
+      });
+    }
+
+    const userData = await userRes.json();
+    const username = userData.login;
+
+    // Store token in github-oauth.json
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    const oauthData = {
+      access_token: access_token,
+      token_type: data.token_type || 'bearer',
+      scope: data.scope || 'repo,read:user',
+      username: username,
+      connected_at: new Date().toISOString()
+    };
+
+    fs.writeFileSync(
+      path.join(STATE_DIR, 'github-oauth.json'),
+      JSON.stringify(oauthData, null, 2),
+      { mode: 0o600 }
+    );
+
+    res.json({ 
+      status: 'success', 
+      access_token: access_token,
+      username: username 
+    });
+  } catch (err) {
+    console.error('[github-auth] poll-auth error:', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+app.get('/setup/api/github/repos', requireSetupAuth, async (req, res) => {
+  try {
+    const token = getGitHubToken();
+    if (!token) {
+      return res.status(400).json({ 
+        ok: false, 
+        error: 'No GitHub token available. Connect GitHub first.' 
+      });
+    }
+
+    // Try installation repos first (fine-grained PATs), fall back to user repos
+    let repos = [];
+    
+    try {
+      const installRes = await fetch('https://api.github.com/installation/repositories?per_page=100', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      if (installRes.ok) {
+        const installData = await installRes.json();
+        if (installData.repositories && installData.repositories.length > 0) {
+          repos = installData.repositories;
+        }
+      }
+    } catch {}
+
+    // Fallback to user repos
+    if (repos.length === 0) {
+      const userRes = await fetch('https://api.github.com/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (!userRes.ok) {
+        return res.status(userRes.status).json({ 
+          ok: false, 
+          error: `GitHub API error: ${userRes.statusText}` 
+        });
+      }
+
+      repos = await userRes.json();
+    }
+
+    // Format repos for the frontend
+    const formattedRepos = repos.map(repo => ({
+      full_name: repo.full_name,
+      private: repo.private,
+      default_branch: repo.default_branch,
+      html_url: repo.html_url
+    }));
+
+    res.json({ repos: formattedRepos });
+  } catch (err) {
+    console.error('[github-auth] repos error:', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+app.get('/setup/api/github/status', requireSetupAuth, async (req, res) => {
+  try {
+    const oauthPath = path.join(STATE_DIR, 'github-oauth.json');
+    if (fs.existsSync(oauthPath)) {
+      const oauth = JSON.parse(fs.readFileSync(oauthPath, 'utf8'));
+      if (oauth.access_token && oauth.username) {
+        return res.json({ 
+          connected: true, 
+          username: oauth.username 
+        });
+      }
+    }
+    res.json({ connected: false });
+  } catch (err) {
+    console.error('[github-auth] status error:', err);
+    res.json({ connected: false });
+  }
+});
+
+app.post('/setup/api/github/disconnect', requireSetupAuth, async (req, res) => {
+  try {
+    const oauthPath = path.join(STATE_DIR, 'github-oauth.json');
+    if (fs.existsSync(oauthPath)) {
+      fs.unlinkSync(oauthPath);
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[github-auth] disconnect error:', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
 
 app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
   try {
@@ -1988,17 +2210,21 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       // ── Clone and build website from GitHub ──────────────────────────────
       if (payload.githubRepo?.trim() && payload.clientDomain?.trim()) {
         const repoUrl = `https://github.com/${payload.githubRepo.trim()}`;
-        const token = payload.githubToken?.trim() || process.env.GITHUB_TOKEN?.trim() || '';
+        // Prefer manual token from form, fall back to OAuth token, then env var
+        let token = payload.githubToken?.trim() || '';
+        if (!token) {
+          token = getGitHubToken();
+        }
         const prodBranch = payload.prodBranch?.trim() || 'main';
         const devBranch = payload.devBranch?.trim() || 'development';
 
-        // Save GitHub config for future rebuilds
+        // Save GitHub config for future rebuilds (only save manual token, not OAuth token)
         const githubConfig = {
           repo: payload.githubRepo.trim(),
           prodBranch,
           devBranch,
-          // Token is saved in the state dir (Railway volume)
-          token: token,
+          // Only save manual token (OAuth token is saved separately in github-oauth.json)
+          token: payload.githubToken?.trim() || '',
         };
         fs.writeFileSync(
           path.join(STATE_DIR, 'github.json'),
@@ -2065,7 +2291,7 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
 
       // ── Clone and set up Gerald Dashboard ──────────────────────────────
       extra += '\n[dashboard] Setting up Gerald Dashboard...\n';
-      const githubToken = payload.githubToken?.trim() || process.env.GITHUB_TOKEN?.trim() || '';
+      const githubToken = payload.githubToken?.trim() || getGitHubToken();
       const dashResult = await setupDashboard(githubToken);
       extra += `[dashboard] ${dashResult.output}\n`;
 
@@ -2183,7 +2409,7 @@ app.post('/api/rebuild', requireSetupAuth, async (req, res) => {
 
     const githubConfig = JSON.parse(fs.readFileSync(githubConfigPath, 'utf8'));
     const repoUrl = `https://github.com/${githubConfig.repo}`;
-    const token = githubConfig.token || process.env.GITHUB_TOKEN?.trim() || '';
+    const token = getGitHubToken();
     const target = req.body?.target || 'both'; // 'production', 'dev', or 'both'
 
     let output = '';
@@ -2295,7 +2521,7 @@ app.post('/api/webhook/github', express.json(), async (req, res) => {
     console.log(`[webhook] GitHub push to branch: ${branch}`);
 
     const repoUrl = `https://github.com/${githubConfig.repo}`;
-    const token = githubConfig.token || process.env.GITHUB_TOKEN?.trim() || '';
+    const token = getGitHubToken();
 
     if (branch === githubConfig.prodBranch) {
       console.log(`[webhook] Rebuilding production...`);

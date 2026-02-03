@@ -188,8 +188,8 @@
       clientDomain: document.getElementById('clientDomain').value,
       clientName: document.getElementById('clientName').value,
       guardrailLevel: document.getElementById('guardrailLevel').value,
-      githubRepo: document.getElementById('githubRepo').value,
-      githubToken: document.getElementById('githubToken').value,
+      githubRepo: document.getElementById('github-repo-select').value,
+      githubToken: '', // OAuth token is stored separately in github-oauth.json
       prodBranch: document.getElementById('prodBranch').value || 'main',
       devBranch: document.getElementById('devBranch').value || 'development',
       sendgridApiKey: document.getElementById('sendgridApiKey').value,
@@ -430,7 +430,121 @@
   style.textContent = '@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }';
   document.head.appendChild(style);
 
+  // ── GitHub OAuth Device Flow ──────────────────────────────────────────
+  window.deviceCode = null;
+  window.pollInterval = null;
+
+  window.startGitHubAuth = async function() {
+    document.getElementById('github-not-connected').style.display = 'none';
+    document.getElementById('github-auth-progress').style.display = 'block';
+    
+    try {
+      const res = await fetch('/setup/api/github/start-auth', { method: 'POST' });
+      const data = await res.json();
+      
+      window.deviceCode = data.device_code;
+      document.getElementById('github-user-code').textContent = data.user_code;
+      
+      // Start polling
+      window.pollInterval = setInterval(window.pollGitHubAuth, (data.interval || 5) * 1000);
+    } catch (err) {
+      alert('Failed to start GitHub auth: ' + err.message);
+      window.resetGitHubUI();
+    }
+  };
+
+  window.pollGitHubAuth = async function() {
+    try {
+      const res = await fetch('/setup/api/github/poll-auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_code: window.deviceCode })
+      });
+      const data = await res.json();
+      
+      if (data.status === 'success') {
+        clearInterval(window.pollInterval);
+        window.showConnectedState(data.username);
+        window.loadRepos();
+      } else if (data.error && data.error !== 'authorization_pending') {
+        clearInterval(window.pollInterval);
+        alert('Authorization failed: ' + data.error);
+        window.resetGitHubUI();
+      }
+    } catch (err) {
+      clearInterval(window.pollInterval);
+      alert('Polling error: ' + err.message);
+      window.resetGitHubUI();
+    }
+  };
+
+  window.loadRepos = async function() {
+    try {
+      const res = await fetch('/setup/api/github/repos');
+      const data = await res.json();
+      
+      if (!data.repos) {
+        alert('Failed to load repos: ' + (data.error || 'Unknown error'));
+        return;
+      }
+      
+      const select = document.getElementById('github-repo-select');
+      select.innerHTML = '<option value="">Select a repository...</option>';
+      
+      data.repos.forEach(function(repo) {
+        var opt = document.createElement('option');
+        opt.value = repo.full_name;
+        opt.textContent = repo.full_name + (repo.private ? ' 🔒' : '');
+        select.appendChild(opt);
+      });
+      
+      // Pre-select gerald-dashboard if exists
+      var gerald = data.repos.find(function(r) { return r.full_name.includes('gerald-dashboard'); });
+      if (gerald) select.value = gerald.full_name;
+    } catch (err) {
+      alert('Failed to load repos: ' + err.message);
+    }
+  };
+
+  window.showConnectedState = function(username) {
+    document.getElementById('github-auth-progress').style.display = 'none';
+    document.getElementById('github-connected').style.display = 'block';
+    document.getElementById('github-username').textContent = '@' + username;
+  };
+
+  window.disconnectGitHub = async function() {
+    if (!confirm('Disconnect GitHub account?')) return;
+    
+    try {
+      await fetch('/setup/api/github/disconnect', { method: 'POST' });
+      window.resetGitHubUI();
+    } catch (err) {
+      alert('Failed to disconnect: ' + err.message);
+    }
+  };
+
+  window.resetGitHubUI = function() {
+    document.getElementById('github-not-connected').style.display = 'block';
+    document.getElementById('github-auth-progress').style.display = 'none';
+    document.getElementById('github-connected').style.display = 'none';
+  };
+
+  // Check GitHub status on page load
+  window.checkGitHubStatus = async function() {
+    try {
+      const res = await fetch('/setup/api/github/status');
+      const data = await res.json();
+      if (data.connected) {
+        window.showConnectedState(data.username);
+        window.loadRepos();
+      }
+    } catch (err) {
+      console.error('Failed to check GitHub status:', err);
+    }
+  };
+
   // Initialize everything
   initCollapsibles();
   refreshStatus();
+  window.checkGitHubStatus();
 })();

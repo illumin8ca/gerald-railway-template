@@ -180,24 +180,54 @@
         </div>
       </div>
 
+      <!-- GitHub OAuth Section -->
       <div class="form-group">
-        <label for="githubToken">GitHub Personal Access Token</label>
-        <div class="input-group">
-          <input id="githubToken" type="password" class="input-field input-group-field" placeholder="github_pat_..." />
-          <button type="button" id="githubTokenSave" class="btn-secondary btn-compact">Save Token</button>
-        </div>
-        <p id="githubTokenStatus" class="field-hint">
-          Fine-grained PAT with Contents:Read permission.
-          <a href="https://github.com/settings/personal-access-tokens/new" target="_blank">Create one →</a>
-        </p>
-      </div>
+        <label>GitHub Integration</label>
+        
+        <div id="github-section">
+          <!-- Not connected state -->
+          <div id="github-not-connected">
+            <p class="field-hint" style="margin-bottom: 12px;">Connect your GitHub account to access repositories.</p>
+            <button type="button" onclick="startGitHubAuth()" class="btn-primary" style="width: 100%;">
+              🐙 Connect GitHub Account
+            </button>
+          </div>
 
-      <div class="form-group">
-        <label for="githubRepo">Repository</label>
-        <div class="select-wrapper">
-          <select id="githubRepo" class="input-field" disabled>
-            <option value="">Save token first...</option>
-          </select>
+          <!-- Auth in progress state -->
+          <div id="github-auth-progress" style="display:none">
+            <p class="field-hint" style="margin-bottom: 8px;">Enter this code on GitHub:</p>
+            <div class="user-code" id="github-user-code">XXXX-XXXX</div>
+            <a href="https://github.com/login/device" target="_blank" class="btn-secondary" style="width: 100%; margin-bottom: 12px;">
+              Open github.com/login/device →
+            </a>
+            <p class="field-hint">⏳ Waiting for authorization...</p>
+          </div>
+
+          <!-- Connected state -->
+          <div id="github-connected" style="display:none">
+            <div class="info-box" style="margin-bottom: 16px;">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                <path d="M10 2a8 8 0 100 16 8 8 0 000-16z" fill="#00ff87" fill-opacity="0.1"/>
+                <path d="M9 12l-2-2m0 0l2-2m-2 2h6m-6 0a5 5 0 105-5" stroke="#00ff87" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              <div>
+                <strong>✅ Connected as <span id="github-username">@username</span></strong>
+              </div>
+            </div>
+            
+            <div class="form-group">
+              <label for="github-repo-select">Website Repository</label>
+              <div class="select-wrapper">
+                <select id="github-repo-select" class="input-field">
+                  <option value="">Select a repository...</option>
+                </select>
+              </div>
+            </div>
+            
+            <button type="button" onclick="disconnectGitHub()" class="btn-tertiary" style="width: 100%;">
+              Disconnect GitHub
+            </button>
+          </div>
         </div>
       </div>
 
