@@ -1799,6 +1799,206 @@ app.post('/setup/api/github/disconnect', requireSetupAuth, async (req, res) => {
 });
 
 // ==============================
+// GitHub OAuth API Routes (Non-setup paths for Dashboard compatibility)
+// ==============================
+// These mirror the /setup/api/github/* routes for the Gerald Dashboard client
+// which calls /api/github/* directly
+
+app.post('/api/github/start-auth', requireSetupAuth, async (req, res) => {
+  try {
+    const response = await fetch('https://github.com/login/device/code', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({
+        client_id: GITHUB_CLIENT_ID,
+        scope: 'repo read:user'
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return res.status(response.status).json({ 
+        ok: false, 
+        error: `GitHub API error: ${errorText}` 
+      });
+    }
+
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    console.error('[github-auth] start-auth error:', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+app.post('/api/github/poll-auth', requireSetupAuth, async (req, res) => {
+  try {
+    const { device_code } = req.body || {};
+    if (!device_code) {
+      return res.status(400).json({ ok: false, error: 'Missing device_code' });
+    }
+
+    const response = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({
+        client_id: GITHUB_CLIENT_ID,
+        device_code: device_code,
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code'
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return res.status(response.status).json({ 
+        ok: false, 
+        error: `GitHub API error: ${errorText}` 
+      });
+    }
+
+    const data = await response.json();
+
+    if (data.error) {
+      if (data.error === 'authorization_pending') {
+        return res.json({ status: 'pending' });
+      }
+      return res.json({ status: 'error', error: data.error });
+    }
+
+    const access_token = data.access_token;
+    const userRes = await fetch('https://api.github.com/user', {
+      headers: { 'Authorization': `Bearer ${access_token}` }
+    });
+
+    if (!userRes.ok) {
+      return res.json({ 
+        status: 'error', 
+        error: 'Failed to fetch user info' 
+      });
+    }
+
+    const userData = await userRes.json();
+    const username = userData.login;
+
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    const oauthData = {
+      access_token: access_token,
+      token_type: data.token_type || 'bearer',
+      scope: data.scope || 'repo,read:user',
+      username: username,
+      connected_at: new Date().toISOString()
+    };
+
+    fs.writeFileSync(
+      path.join(STATE_DIR, 'github-oauth.json'),
+      JSON.stringify(oauthData, null, 2),
+      { mode: 0o600 }
+    );
+
+    res.json({ 
+      status: 'success', 
+      access_token: access_token,
+      username: username 
+    });
+  } catch (err) {
+    console.error('[github-auth] poll-auth error:', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+app.get('/api/github/repos', requireSetupAuth, async (req, res) => {
+  try {
+    const token = getGitHubToken();
+    if (!token) {
+      return res.status(400).json({ 
+        ok: false, 
+        error: 'No GitHub token available. Connect GitHub first.' 
+      });
+    }
+
+    let repos = [];
+    
+    try {
+      const installRes = await fetch('https://api.github.com/installation/repositories?per_page=100', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      if (installRes.ok) {
+        const installData = await installRes.json();
+        if (installData.repositories && installData.repositories.length > 0) {
+          repos = installData.repositories;
+        }
+      }
+    } catch {}
+
+    if (repos.length === 0) {
+      const userRes = await fetch('https://api.github.com/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (!userRes.ok) {
+        return res.status(userRes.status).json({ 
+          ok: false, 
+          error: `GitHub API error: ${userRes.statusText}` 
+        });
+      }
+
+      repos = await userRes.json();
+    }
+
+    const formattedRepos = repos.map(repo => ({
+      full_name: repo.full_name,
+      private: repo.private,
+      default_branch: repo.default_branch,
+      html_url: repo.html_url
+    }));
+
+    res.json({ repos: formattedRepos });
+  } catch (err) {
+    console.error('[github-auth] repos error:', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+app.get('/api/github/status', requireSetupAuth, async (req, res) => {
+  try {
+    const oauthPath = path.join(STATE_DIR, 'github-oauth.json');
+    if (fs.existsSync(oauthPath)) {
+      const oauth = JSON.parse(fs.readFileSync(oauthPath, 'utf8'));
+      if (oauth.access_token && oauth.username) {
+        return res.json({ 
+          connected: true, 
+          username: oauth.username 
+        });
+      }
+    }
+    res.json({ connected: false });
+  } catch (err) {
+    console.error('[github-auth] status error:', err);
+    res.json({ connected: false });
+  }
+});
+
+app.post('/api/github/disconnect', requireSetupAuth, async (req, res) => {
+  try {
+    const oauthPath = path.join(STATE_DIR, 'github-oauth.json');
+    if (fs.existsSync(oauthPath)) {
+      fs.unlinkSync(oauthPath);
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[github-auth] disconnect error:', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// ==============================
 // Codex CLI Authentication (Device Code Flow)
 // ==============================
 app.post('/setup/api/codex/start-auth', requireSetupAuth, async (req, res) => {
