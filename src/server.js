@@ -62,6 +62,70 @@ import * as tar from "tar";
   }
 }
 
+// ── Tailscale Setup ───────────────────────────────────────────────────────
+// Start tailscaled and authenticate if TAILSCALE_AUTHKEY is set
+async function startTailscale() {
+  const authKey = process.env.TAILSCALE_AUTHKEY?.trim();
+  if (!authKey) {
+    console.log('[tailscale] TAILSCALE_AUTHKEY not set, skipping Tailscale setup');
+    return { ok: false, reason: 'no auth key' };
+  }
+
+  console.log('[tailscale] Starting tailscaled daemon...');
+  
+  // Start tailscaled in userspace networking mode (works in containers without TUN device)
+  const tailscaled = childProcess.spawn('tailscaled', [
+    '--state=/data/.tailscale/tailscaled.state',
+    '--socket=/var/run/tailscale/tailscaled.sock',
+    '--tun=userspace-networking',
+  ], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
+  });
+
+  tailscaled.stdout.on('data', (d) => console.log('[tailscaled]', d.toString().trim()));
+  tailscaled.stderr.on('data', (d) => console.log('[tailscaled]', d.toString().trim()));
+  tailscaled.unref();
+
+  // Wait for tailscaled to be ready
+  await new Promise(r => setTimeout(r, 2000));
+
+  // Authenticate with the auth key
+  console.log('[tailscale] Authenticating...');
+  const hostname = process.env.TAILSCALE_HOSTNAME || 'cass-ai-railway';
+  
+  return new Promise((resolve) => {
+    const up = childProcess.spawn('tailscale', [
+      'up',
+      '--authkey', authKey,
+      '--hostname', hostname,
+      '--accept-routes',
+    ], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let output = '';
+    up.stdout.on('data', (d) => { output += d.toString(); console.log('[tailscale]', d.toString().trim()); });
+    up.stderr.on('data', (d) => { output += d.toString(); console.log('[tailscale]', d.toString().trim()); });
+
+    up.on('close', (code) => {
+      if (code === 0) {
+        console.log('[tailscale] ✓ Connected to tailnet');
+        // Get and log the IP address
+        childProcess.exec('tailscale ip -4', (err, stdout) => {
+          if (!err && stdout.trim()) {
+            console.log(`[tailscale] IP address: ${stdout.trim()}`);
+          }
+        });
+        resolve({ ok: true });
+      } else {
+        console.error('[tailscale] Failed to connect:', output);
+        resolve({ ok: false, reason: output });
+      }
+    });
+  });
+}
+
 // Railway commonly sets PORT=8080 for HTTP services.
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
 const STATE_DIR =
@@ -2472,6 +2536,13 @@ app.use(async (req, res, next) => {
 });
 
 // Create HTTP server from Express app
+// Ensure tailscale directories exist
+fs.mkdirSync('/data/.tailscale', { recursive: true });
+fs.mkdirSync('/var/run/tailscale', { recursive: true });
+
+// Start Tailscale before the HTTP server
+startTailscale().catch(err => console.error('[tailscale] Startup error:', err));
+
 const server = app.listen(PORT, async () => {
   console.log(`[wrapper] listening on port ${PORT}`);
   console.log(`[wrapper] setup wizard: http://localhost:${PORT}/setup`);
