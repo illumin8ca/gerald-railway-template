@@ -1752,13 +1752,23 @@ app.get('/setup/api/github/repos', requireSetupAuth, async (req, res) => {
     }
 
     // Format repos for the frontend
-    const formattedRepos = repos.map(repo => ({
-      full_name: repo.full_name,
-      private: repo.private,
-      default_branch: repo.default_branch,
-      html_url: repo.html_url
-    }));
+    const formattedRepos = repos.map(repo => {
+      // Ensure full_name is properly formatted
+      const fullName = repo.full_name || `${repo.owner?.login}/${repo.name}`;
+      return {
+        id: repo.id,
+        name: repo.name,
+        full_name: fullName,
+        owner: repo.owner?.login || '',
+        private: repo.private,
+        default_branch: repo.default_branch,
+        html_url: repo.html_url,
+        description: repo.description || '',
+        language: repo.language || ''
+      };
+    });
 
+    console.log(`[github-repos] Returning ${formattedRepos.length} repos`);
     res.json({ repos: formattedRepos });
   } catch (err) {
     console.error('[github-auth] repos error:', err);
@@ -3442,9 +3452,126 @@ server.on("upgrade", async (req, socket, head) => {
 });
 
 // ==============================
-// Note: Dashboard API routes (/api/health/*, /api/dashboard/*, /api/system/*)
-// are proxied to the Gerald Dashboard server which handles its own JWT authentication.
-// Do not add requireSetupAuth to these routes - the Dashboard validates JWT tokens.
+// Dashboard API Routes (proxied to Gerald Dashboard - no requireSetupAuth)
+// ==============================
+
+// Gerald Dashboard version check
+app.get('/api/dashboard/gerald-version', async (req, res) => {
+  try {
+    // Proxy to Dashboard server
+    const dashboardRes = await fetch(`http://127.0.0.1:${DASHBOARD_PORT}/api/dashboard/gerald-version`);
+    if (!dashboardRes.ok) {
+      // If Dashboard endpoint doesn't exist, return mock data
+      const dashboardDir = path.join(STATE_DIR, 'gerald-dashboard');
+      let currentCommit = 'unknown';
+      let behindBy = 0;
+      
+      if (fs.existsSync(dashboardDir)) {
+        try {
+          const { output: commit } = await runCmd('git', ['rev-parse', '--short', 'HEAD'], { cwd: dashboardDir });
+          currentCommit = commit.trim();
+          
+          // Check if behind origin/main
+          await runCmd('git', ['fetch', 'origin', 'main'], { cwd: dashboardDir });
+          const { output: behind } = await runCmd('git', ['rev-list', '--count', 'HEAD..origin/main'], { cwd: dashboardDir });
+          behindBy = parseInt(behind.trim()) || 0;
+        } catch (gitErr) {
+          console.log('[gerald-version] git check failed:', gitErr.message);
+        }
+      }
+      
+      return res.json({
+        currentCommit,
+        behindBy,
+        canUpdate: behindBy > 0,
+        updateAvailable: behindBy > 0,
+        source: 'wrapper-fallback'
+      });
+    }
+    
+    const data = await dashboardRes.json();
+    res.json(data);
+  } catch (err) {
+    console.error('[gerald-version] error:', err);
+    res.status(500).json({ error: 'Failed to check version' });
+  }
+});
+
+// Gerald Dashboard update
+app.post('/api/dashboard/gerald-update', async (req, res) => {
+  try {
+    const dashboardDir = path.join(STATE_DIR, 'gerald-dashboard');
+    
+    if (!fs.existsSync(dashboardDir)) {
+      return res.status(400).json({ success: false, error: 'Dashboard not installed' });
+    }
+
+    // Pull latest changes
+    const { output: pullOutput } = await runCmd('git', ['pull', 'origin', 'main'], { cwd: dashboardDir });
+    
+    // Rebuild the dashboard
+    await runCmd('npm', ['run', 'build'], { cwd: dashboardDir });
+
+    // Restart dashboard process
+    if (dashboardProcess) {
+      dashboardProcess.kill('SIGTERM');
+      await new Promise(r => setTimeout(r, 2000));
+      await startDashboard();
+    }
+
+    res.json({
+      success: true,
+      message: `Updated and rebuilt. ${pullOutput}`,
+      restarted: true
+    });
+  } catch (err) {
+    console.error('[gerald-update] error:', err);
+    res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
+// System health endpoint
+app.get('/api/system/health', async (req, res) => {
+  try {
+    const status = {
+      gateway: gatewayProc ? 'running' : 'stopped',
+      dashboard: dashboardProcess ? 'running' : 'stopped',
+      devServer: devServerProcess ? 'running' : 'stopped',
+      timestamp: new Date().toISOString()
+    };
+    res.json(status);
+  } catch (err) {
+    console.error('[system-health] error:', err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// Health data endpoints (mock data for Railway template)
+app.get('/api/health/summary', async (req, res) => {
+  res.json({
+    today: { step_count: 0, active_energy: 0, sleep_hours: 0, exercise_minutes: 0, stand_hours: 0 },
+    goals: { step_count: 10000, active_energy: 500, sleep_hours: 8, exercise_minutes: 30, stand_hours: 12 }
+  });
+});
+
+app.get('/api/health/history/:metric', async (req, res) => {
+  res.json({ metric: req.params.metric, days: parseInt(req.query.days) || 7, data: [] });
+});
+
+app.get('/api/health/hourly/:metric', async (req, res) => {
+  res.json({ metric: req.params.metric, date: req.query.date, data: [] });
+});
+
+app.get('/api/health/vitals', async (req, res) => {
+  res.json({ vitals: [] });
+});
+
+app.get('/api/health/workouts/today', async (req, res) => {
+  res.json({ workouts: [] });
+});
+
+// Note: Other Dashboard API routes (/api/health/*) are handled above
+// The Dashboard server handles its own JWT authentication
 
 process.on("SIGTERM", () => {
   // Best-effort shutdown
