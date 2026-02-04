@@ -210,10 +210,8 @@
     if (!payload.clientDomain?.trim()) errors.push('Client Domain is required');
     if (!payload.githubRepo?.trim()) errors.push('Website Repository is required (connect GitHub and select a repo)');
     
-    // CLI-based auth methods don't need authSecret (they use separate token files)
-    var cliAuthMethods = ['claude-cli', 'codex-cli', 'openai-codex', 'google-antigravity', 'google-gemini-cli', 'qwen-portal'];
-    var needsAuthSecret = payload.authChoice && payload.authChoice !== 'none' && !cliAuthMethods.includes(payload.authChoice);
-    if (needsAuthSecret && !payload.authSecret?.trim()) errors.push('API Key / Token is required for this auth method');
+    // API Key / Token is optional - can be pre-configured in environment or use CLI auth
+    // Let the backend/OpenClaw handle auth validation
     
     if (errors.length > 0) {
       alert('Missing required fields:\n\n• ' + errors.join('\n• '));
