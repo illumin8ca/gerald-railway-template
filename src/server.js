@@ -611,6 +611,29 @@ app.use(cookieParser());
 // Minimal health endpoint for Railway.
 app.get("/setup/healthz", (_req, res) => res.json({ ok: true }));
 
+// Public status endpoint - shows what's happening without auth
+app.get("/status", (_req, res) => {
+  res.json({
+    configured: isConfigured(),
+    dashboard: {
+      running: !!dashboardProcess,
+      installed: fs.existsSync(path.join(DASHBOARD_DIR, 'package.json')),
+    },
+    gateway: {
+      running: !!gatewayProc,
+    },
+    devServer: {
+      running: !!devServerProcess,
+      installed: fs.existsSync(path.join(DEV_DIR, 'package.json')),
+    },
+    site: {
+      production: fs.existsSync(path.join(PRODUCTION_DIR, 'index.html')),
+      dev: fs.existsSync(path.join(DEV_DIR, 'dist', 'index.html')) || fs.existsSync(path.join(DEV_DIR, 'index.html')),
+    },
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // Serve static files for setup wizard (no-cache to avoid stale JS/CSS)
 app.get("/setup/app.js", requireSetupAuth, (_req, res) => {
   res.set("Cache-Control", "no-cache, no-store, must-revalidate");
@@ -1615,8 +1638,20 @@ async function startDashboard() {
   console.log('[workspace] Workspace auto-setup disabled (use /api/rebuild-workspace to set up manually)');
 
   // Always run setup (which pulls latest + rebuilds) before starting
+  // Use timeout to prevent blocking forever
   console.log('[dashboard] Checking for updates...');
-  const result = await setupDashboard();
+  let result = { ok: false, output: 'Timeout' };
+  try {
+    const setupPromise = setupDashboard();
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Dashboard setup timeout (3 min)')), 180000)
+    );
+    result = await Promise.race([setupPromise, timeoutPromise]);
+  } catch (err) {
+    console.warn('[dashboard] Setup issue:', err.message);
+    result = { ok: false, output: err.message };
+  }
+  
   if (!result.ok) {
     // If setup/update failed but we have an existing install, try to start it anyway
     if (fs.existsSync(path.join(DASHBOARD_DIR, 'package.json'))) {
