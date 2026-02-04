@@ -2917,6 +2917,62 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
         extra += `\n[services] Configuration saved\n`;
       }
 
+      // ── Save additional API keys to auth-profiles.json ──────────────────
+      const extraKeys = {};
+      if (payload.anthropicApiKey?.trim()) extraKeys.anthropic = payload.anthropicApiKey.trim();
+      if (payload.openaiApiKey?.trim()) extraKeys.openai = payload.openaiApiKey.trim();
+      if (payload.openrouterApiKey?.trim()) extraKeys.openrouter = payload.openrouterApiKey.trim();
+      
+      if (Object.keys(extraKeys).length > 0) {
+        const agentDir = path.join(STATE_DIR, 'agents', 'main', 'agent');
+        const authProfilesPath = path.join(agentDir, 'auth-profiles.json');
+        fs.mkdirSync(agentDir, { recursive: true });
+        
+        let authProfiles = { version: 1, profiles: {}, lastGood: {}, usageStats: {} };
+        if (fs.existsSync(authProfilesPath)) {
+          try { authProfiles = JSON.parse(fs.readFileSync(authProfilesPath, 'utf8')); } catch {}
+        }
+        
+        // Also read openclaw.json to save API keys there (dashboard reads from both)
+        let openclawConfig = {};
+        if (fs.existsSync(configPath())) {
+          try { openclawConfig = JSON.parse(fs.readFileSync(configPath(), 'utf8')); } catch {}
+        }
+        
+        const providerBaseUrls = {
+          anthropic: 'https://api.anthropic.com/v1',
+          openai: 'https://api.openai.com/v1',
+          openrouter: 'https://openrouter.ai/api/v1',
+        };
+        
+        for (const [provider, key] of Object.entries(extraKeys)) {
+          // Save to auth-profiles.json (what the gateway reads)
+          authProfiles.profiles[`${provider}:default`] = {
+            type: 'api_key',
+            provider,
+            key,
+          };
+          
+          // Save to openclaw.json models.providers (what the dashboard reads)
+          if (!openclawConfig.models) openclawConfig.models = {};
+          if (!openclawConfig.models.providers) openclawConfig.models.providers = {};
+          openclawConfig.models.providers[provider] = {
+            ...(openclawConfig.models.providers[provider] || {}),
+            apiKey: key,
+            baseUrl: providerBaseUrls[provider] || '',
+          };
+          if (provider === 'openrouter' || provider === 'openai') {
+            openclawConfig.models.providers[provider].api = 'openai-completions';
+          }
+          
+          extra += `\n[auth] Saved ${provider} API key\n`;
+        }
+        
+        fs.writeFileSync(authProfilesPath, JSON.stringify(authProfiles, null, 2), { mode: 0o600 });
+        fs.writeFileSync(configPath(), JSON.stringify(openclawConfig, null, 2));
+        console.log(`[onboard] Saved extra API keys: ${Object.keys(extraKeys).join(', ')}`);
+      }
+
       // ── Clone and build website from GitHub ──────────────────────────────
       if (payload.githubRepo?.trim() && payload.clientDomain?.trim()) {
         const repoUrl = `https://github.com/${payload.githubRepo.trim()}`;

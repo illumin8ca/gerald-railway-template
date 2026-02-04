@@ -202,7 +202,11 @@
       twilioToken: document.getElementById('twilioToken').value,
       twilioPhone: document.getElementById('twilioPhone').value,
       turnstileSiteKey: document.getElementById('turnstileSiteKey').value,
-      turnstileSecretKey: document.getElementById('turnstileSecretKey').value
+      turnstileSecretKey: document.getElementById('turnstileSecretKey').value,
+      // Additional API keys for multi-provider setup
+      anthropicApiKey: document.getElementById('anthropicApiKey').value,
+      openaiApiKey: document.getElementById('openaiApiKey').value,
+      openrouterApiKey: document.getElementById('openrouterApiKey').value
     };
 
     // Validate required fields
