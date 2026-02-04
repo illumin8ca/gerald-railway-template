@@ -1490,10 +1490,97 @@ async function setupDashboard(token) {
   return { ok: true, output: 'Dashboard installed and built' };
 }
 
+// ── Gerald Workspace setup ────────────────────────────────────────────
+async function setupWorkspace(token) {
+  // Fall back to OAuth or saved GitHub token if none provided
+  if (!token) {
+    token = getGitHubToken();
+  }
+
+  // Read workspace repo from illumin8.json config
+  let workspaceRepo = null;
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'illumin8.json'), 'utf8'));
+    workspaceRepo = cfg.workspaceRepo;
+  } catch (e) {
+    // Config doesn't exist yet
+  }
+
+  // Default to illumin8ca/gerald if not configured
+  if (!workspaceRepo) {
+    workspaceRepo = 'https://github.com/illumin8ca/gerald';
+  }
+
+  // Ensure it's a full URL
+  if (!workspaceRepo.startsWith('http')) {
+    workspaceRepo = `https://github.com/${workspaceRepo}`;
+  }
+
+  const authUrl = token
+    ? workspaceRepo.replace('https://', `https://x-access-token:${token}@`)
+    : workspaceRepo;
+
+  // Check if workspace already has a git repo
+  const hasGitRepo = fs.existsSync(path.join(WORKSPACE_DIR, '.git'));
+  
+  if (!hasGitRepo) {
+    console.log(`[workspace] Cloning workspace from ${workspaceRepo}...`);
+    // Don't remove existing workspace files, just init git
+    // First try to clone into a temp dir, then move files
+    const tempDir = path.join(STATE_DIR, 'workspace-temp');
+    await safeRemoveDir(tempDir);
+    
+    const clone = await runCmd('git', ['clone', '--depth', '1', authUrl, tempDir]);
+    if (clone.code !== 0) {
+      console.error('[workspace] Clone failed:', clone.output);
+      return { ok: false, output: clone.output };
+    }
+    
+    // Move git repo and files to workspace dir (preserving existing non-conflicting files)
+    fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+    
+    // Move .git directory
+    if (fs.existsSync(path.join(tempDir, '.git'))) {
+      fs.renameSync(path.join(tempDir, '.git'), path.join(WORKSPACE_DIR, '.git'));
+    }
+    
+    // Copy files from temp to workspace (don't overwrite existing)
+    const copyFiles = await runCmd('cp', ['-rn', `${tempDir}/.`, WORKSPACE_DIR]);
+    
+    await safeRemoveDir(tempDir);
+    console.log('[workspace] Workspace initialized from', workspaceRepo);
+  } else {
+    // Pull latest changes
+    console.log('[workspace] Updating workspace...');
+    // Update remote URL in case token changed
+    await runCmd('git', ['remote', 'set-url', 'origin', authUrl], { cwd: WORKSPACE_DIR });
+    const pull = await runCmd('git', ['pull', '--ff-only', 'origin', 'main'], { cwd: WORKSPACE_DIR });
+    if (pull.code !== 0) {
+      // Don't do fresh clone for workspace - might have local changes
+      console.log('[workspace] Pull failed (may have local changes):', pull.output.split('\n')[0]);
+      // Try to at least fetch so we know what's available
+      await runCmd('git', ['fetch', 'origin', 'main'], { cwd: WORKSPACE_DIR });
+      return { ok: true, output: 'Workspace fetch complete (pull failed, may have local changes)' };
+    } else {
+      console.log('[workspace] Updated:', pull.output.split('\n')[0]);
+    }
+  }
+
+  return { ok: true, output: 'Workspace ready' };
+}
+
 let dashboardProcess = null;
 
 async function startDashboard() {
   if (dashboardProcess) return;
+
+  // Setup workspace first (clone/pull Gerald repo with memories, skills, etc.)
+  console.log('[workspace] Checking workspace...');
+  const wsResult = await setupWorkspace();
+  if (!wsResult.ok) {
+    console.warn('[workspace] Setup issue:', wsResult.output);
+    // Continue anyway - workspace is optional
+  }
 
   // Always run setup (which pulls latest + rebuilds) before starting
   console.log('[dashboard] Checking for updates...');
@@ -2998,6 +3085,64 @@ app.post('/api/rebuild-dashboard', requireSetupAuth, async (req, res) => {
     res.json({ ok: true, output: result.output + '\nDashboard restarted.' });
   } catch (err) {
     console.error('[rebuild-dashboard]', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// Rebuild/Update Gerald Workspace from GitHub
+app.post('/api/rebuild-workspace', requireSetupAuth, async (req, res) => {
+  try {
+    const token = req.body?.token?.trim() || '';
+    const result = await setupWorkspace(token);
+    res.json({ ok: result.ok, output: result.output });
+  } catch (err) {
+    console.error('[rebuild-workspace]', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// Configure workspace repo URL
+app.post('/api/config/workspace-repo', requireSetupAuth, async (req, res) => {
+  try {
+    const { repoUrl } = req.body;
+    if (!repoUrl) {
+      return res.status(400).json({ ok: false, error: 'repoUrl required' });
+    }
+
+    // Read existing config
+    const configPath = path.join(STATE_DIR, 'illumin8.json');
+    let config = {};
+    try {
+      config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    } catch (e) {}
+
+    // Update workspace repo
+    config.workspaceRepo = repoUrl;
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+    res.json({ ok: true, message: `Workspace repo set to ${repoUrl}` });
+  } catch (err) {
+    console.error('[config/workspace-repo]', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// Get workspace repo config
+app.get('/api/config/workspace-repo', requireSetupAuth, (req, res) => {
+  try {
+    const configPath = path.join(STATE_DIR, 'illumin8.json');
+    let config = {};
+    try {
+      config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    } catch (e) {}
+
+    res.json({ 
+      ok: true, 
+      repoUrl: config.workspaceRepo || 'https://github.com/illumin8ca/gerald',
+      isDefault: !config.workspaceRepo
+    });
+  } catch (err) {
+    console.error('[config/workspace-repo]', err);
     res.status(500).json({ ok: false, error: String(err) });
   }
 });
