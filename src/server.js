@@ -1587,22 +1587,10 @@ let dashboardProcess = null;
 async function startDashboard() {
   if (dashboardProcess) return;
 
-  // Setup workspace first (clone/pull Gerald repo with memories, skills, etc.)
-  // Use timeout to prevent blocking startup
-  console.log('[workspace] Checking workspace...');
-  try {
-    const wsPromise = setupWorkspace();
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Workspace setup timeout (30s)')), 30000)
-    );
-    const wsResult = await Promise.race([wsPromise, timeoutPromise]);
-    if (!wsResult.ok) {
-      console.warn('[workspace] Setup issue:', wsResult.output);
-    }
-  } catch (wsErr) {
-    console.warn('[workspace] Setup skipped:', wsErr.message);
-    // Continue anyway - workspace is optional
-  }
+  // Setup workspace (clone/pull Gerald repo with memories, skills, etc.)
+  // Disabled for now - can be triggered manually via /api/rebuild-workspace
+  // TODO: Re-enable once stable
+  console.log('[workspace] Workspace auto-setup disabled (use /api/rebuild-workspace to set up manually)');
 
   // Always run setup (which pulls latest + rebuilds) before starting
   console.log('[dashboard] Checking for updates...');

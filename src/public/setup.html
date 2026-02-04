@@ -328,23 +328,37 @@
                 <text x="10" y="14" text-anchor="middle" fill="#00b4d8" font-size="12" font-weight="bold">i</text>
               </svg>
               <div>
-                <strong>Manual Authentication Required</strong>
-                <p style="margin-top: 8px; font-size: 13px; line-height: 1.5;">
-                  1. SSH into your Railway instance<br>
-                  2. Run: <code style="background: rgba(0,255,135,0.1); padding: 2px 6px; border-radius: 4px;">claude</code><br>
-                  3. Follow the authentication flow in your browser<br>
-                  4. Refresh this page to verify connection
+                <strong>Setup Token Authentication</strong>
+                <p style="margin-top: 8px; font-size: 13px; line-height: 1.6;">
+                  On a machine with Claude Code already authenticated, run:<br>
+                  <code style="background: rgba(0,255,135,0.1); padding: 4px 8px; border-radius: 4px; display: inline-block; margin: 8px 0;">claude config get oauthToken</code><br>
+                  Copy the token and paste it below:
                 </p>
               </div>
             </div>
-            <div style="display: flex; gap: 12px;">
-              <button type="button" onclick="checkClaudeStatus()" class="btn-primary" style="flex: 1;">
+            <div class="form-group" style="margin-bottom: 16px;">
+              <input id="claude-setup-token" type="password" class="input-field" placeholder="Paste your Claude OAuth token here..." />
+            </div>
+            <div style="display: flex; gap: 12px; margin-bottom: 16px;">
+              <button type="button" onclick="saveClaudeToken()" class="btn-primary" style="flex: 1;">
+                💾 Save Token
+              </button>
+              <button type="button" onclick="checkClaudeStatus()" class="btn-secondary" style="flex: 1;">
                 ✓ Check Status
               </button>
-              <button type="button" onclick="hideClaudeInstructions()" class="btn-tertiary" style="flex: 1;">
-                Hide Instructions
-              </button>
             </div>
+            <details style="font-size: 13px; color: #8892b0;">
+              <summary style="cursor: pointer; margin-bottom: 8px;">Alternative: SSH Authentication</summary>
+              <p style="line-height: 1.5; padding-left: 16px;">
+                1. SSH into your Railway instance<br>
+                2. Run: <code style="background: rgba(0,255,135,0.1); padding: 2px 6px; border-radius: 4px;">claude</code><br>
+                3. Follow the authentication flow in your browser<br>
+                4. Click "Check Status" to verify
+              </p>
+            </details>
+            <button type="button" onclick="hideClaudeInstructions()" class="btn-tertiary" style="width: 100%; margin-top: 12px;">
+              Hide Instructions
+            </button>
           </div>
 
           <!-- Connected state -->
