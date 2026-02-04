@@ -1408,7 +1408,17 @@ async function startDevServer() {
     await runCmd('npm', ['install'], { cwd: DEV_DIR });
   }
 
-  devServerProcess = childProcess.spawn('npm', ['run', 'dev'], {
+  // Kill any stale dev servers on our port first
+  try {
+    const lsof = childProcess.execSync(`lsof -ti:${DEV_SERVER_PORT} 2>/dev/null || true`).toString().trim();
+    if (lsof) {
+      console.log(`[dev-server] Killing stale process on port ${DEV_SERVER_PORT}: ${lsof}`);
+      childProcess.execSync(`kill -9 ${lsof} 2>/dev/null || true`);
+      await new Promise(r => setTimeout(r, 500));
+    }
+  } catch {}
+
+  devServerProcess = childProcess.spawn('npm', ['run', 'dev', '--', '--port', String(DEV_SERVER_PORT), '--host', '0.0.0.0'], {
     cwd: DEV_DIR,
     env: {
       ...process.env,
