@@ -209,7 +209,11 @@
     var errors = [];
     if (!payload.clientDomain?.trim()) errors.push('Client Domain is required');
     if (!payload.githubRepo?.trim()) errors.push('Website Repository is required (connect GitHub and select a repo)');
-    if (!payload.authSecret?.trim() && payload.authChoice !== 'none') errors.push('Auth Secret is required');
+    
+    // CLI-based auth methods don't need authSecret (they use separate token files)
+    var cliAuthMethods = ['claude-cli', 'codex-cli', 'openai-codex', 'google-antigravity', 'google-gemini-cli', 'qwen-portal'];
+    var needsAuthSecret = payload.authChoice && payload.authChoice !== 'none' && !cliAuthMethods.includes(payload.authChoice);
+    if (needsAuthSecret && !payload.authSecret?.trim()) errors.push('API Key / Token is required for this auth method');
     
     if (errors.length > 0) {
       alert('Missing required fields:\n\n• ' + errors.join('\n• '));
