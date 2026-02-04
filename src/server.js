@@ -2381,6 +2381,33 @@ app.get('/setup/api/claude/status', requireSetupAuth, async (req, res) => {
   }
 });
 
+// Save Claude auth token (pasted from local machine)
+app.post('/setup/api/claude/save-token', requireSetupAuth, async (req, res) => {
+  try {
+    const { oauthToken } = req.body;
+    
+    if (!oauthToken) {
+      return res.status(400).json({ ok: false, error: 'oauthToken is required' });
+    }
+    
+    // Create auth data structure that Claude Code expects
+    const authData = {
+      oauthAccount: { token: oauthToken },
+      accessToken: oauthToken
+    };
+    
+    // Save to /data/.claude.json
+    const authPath = path.join('/data', '.claude.json');
+    fs.writeFileSync(authPath, JSON.stringify(authData, null, 2), { mode: 0o600 });
+    
+    console.log('[claude-auth] Token saved successfully');
+    res.json({ ok: true, message: 'Claude Code authentication saved' });
+  } catch (err) {
+    console.error('[claude-auth] save-token error:', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
 app.post('/setup/api/claude/disconnect', requireSetupAuth, async (req, res) => {
   try {
     const authPath = path.join('/data', '.claude.json');

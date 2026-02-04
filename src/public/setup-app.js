@@ -636,7 +636,7 @@
   };
 
   // ==============================
-  // Claude Code CLI Authentication
+  // Claude Code CLI Authentication (Token Paste)
   // ==============================
   window.showClaudeInstructions = function() {
     document.getElementById('claude-not-connected').style.display = 'none';
@@ -646,6 +646,37 @@
   window.hideClaudeInstructions = function() {
     document.getElementById('claude-instructions').style.display = 'none';
     document.getElementById('claude-not-connected').style.display = 'block';
+  };
+
+  window.saveClaudeToken = async function() {
+    const tokenInput = document.getElementById('claude-setup-token');
+    const oauthToken = tokenInput.value.trim();
+    
+    if (!oauthToken) {
+      alert('Please paste your Claude OAuth token');
+      return;
+    }
+    
+    try {
+      const res = await fetch('/setup/api/claude/save-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ oauthToken })
+      });
+      const data = await res.json();
+      
+      if (!res.ok || !data.ok) {
+        alert('Failed to save token: ' + (data.error || 'Unknown error'));
+        return;
+      }
+      
+      document.getElementById('claude-instructions').style.display = 'none';
+      document.getElementById('claude-connected').style.display = 'block';
+      tokenInput.value = '';
+      alert('✓ Claude Code authentication saved!');
+    } catch (err) {
+      alert('Error: ' + err.message);
+    }
   };
 
   window.checkClaudeStatus = async function() {
