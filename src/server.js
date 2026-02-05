@@ -43,6 +43,19 @@ import * as tar from "tar";
     }
   }
 
+  // Codex auth: restore from persistent volume (/data/.codex/auth.json)
+  const codexPersist = "/data/.codex/auth.json";
+  const codexRuntime = path.join(home, ".codex", "auth.json");
+  try {
+    if (fs.existsSync(codexPersist) && !fs.existsSync(codexRuntime)) {
+      fs.mkdirSync(path.join(home, ".codex"), { recursive: true });
+      fs.copyFileSync(codexPersist, codexRuntime);
+      console.log(`[startup] restored Codex auth from ${codexPersist}`);
+    }
+  } catch (err) {
+    console.warn(`[startup] could not restore Codex auth: ${err.message}`);
+  }
+
   // Ensure the claude bin symlink points at the latest persisted version.
   const binLink = path.join(localBin, "claude");
   const versionsDir = "/data/claude-code/versions";
