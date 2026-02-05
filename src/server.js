@@ -1393,7 +1393,6 @@ async function cloneAndBuild(repoUrl, branch, targetDir, token, opts = {}) {
   // Detect build system and install deps
   const packageJson = path.join(targetDir, 'package.json');
   if (fs.existsSync(packageJson)) {
-    console.log(`[build] Installing dependencies...`);
     // Use clean PATH to avoid esbuild version conflicts with openclaw's bundled version
     const cleanEnv = {
       ...process.env,
@@ -1401,6 +1400,33 @@ async function cloneAndBuild(repoUrl, branch, targetDir, token, opts = {}) {
       // Prevent esbuild from finding stale binaries during postinstall
       ESBUILD_BINARY_PATH: '',
     };
+
+    if (keepSource) {
+      // ── DEV MODE: Keep full source code for live dev server ──
+      // Just install dependencies — no build needed.
+      // The dev server (e.g. `npm run dev` / Astro) handles compilation on-the-fly.
+      console.log(`[build] Dev mode: installing dependencies (full install)...`);
+      const install = await runCmd('npm', ['install'], { cwd: targetDir, env: cleanEnv });
+      if (install.code !== 0) {
+        console.error(`[build] npm install failed: ${install.output}`);
+        return { ok: false, output: install.output };
+      }
+
+      // Strip token from git remote URL for security (dev dir persists)
+      if (token) {
+        const remoteResult = await runCmd('git', ['remote', 'get-url', 'origin'], { cwd: targetDir });
+        if (remoteResult.code === 0) {
+          const cleanUrl = remoteResult.output.trim().replace(/https:\/\/.*?@/, 'https://');
+          await runCmd('git', ['remote', 'set-url', 'origin', cleanUrl], { cwd: targetDir });
+        }
+      }
+
+      console.log(`[build] Dev source ready: ${targetDir} (branch: ${branch})`);
+      return { ok: true, output: `Cloned source from ${branch} branch (dev mode — ready for npm run dev)` };
+    }
+
+    // ── PRODUCTION MODE: Install, build, and extract output ──
+    console.log(`[build] Installing dependencies...`);
 
     // Step 1: Install without running postinstall scripts (avoids esbuild version conflicts)
     console.log(`[build] Installing dependencies (--ignore-scripts)...`);
@@ -1473,7 +1499,7 @@ async function cloneAndBuild(repoUrl, branch, targetDir, token, opts = {}) {
       }
     }
 
-    if (outputDir && outputDir !== targetDir && !keepSource) {
+    if (outputDir && outputDir !== targetDir) {
       // Move build output to be the root of targetDir (production optimization)
       // First, move output to a temp location
       const tmpDir = targetDir + '_built';
@@ -1484,9 +1510,6 @@ async function cloneAndBuild(repoUrl, branch, targetDir, token, opts = {}) {
       // Move built output to target
       fs.renameSync(tmpDir, targetDir);
       console.log(`[build] Moved build output to ${targetDir}`);
-    } else if (keepSource) {
-      // Keep source for dev server - build output stays in dist/
-      console.log(`[build] Keeping source code in ${targetDir} (dev mode)`);
     }
 
     console.log(`[build] Build complete: ${targetDir}`);
