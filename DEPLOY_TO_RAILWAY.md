@@ -1,10 +1,24 @@
 # Deploy to Railway - One-Click Guide
 
-## ⚠️ Important: Volumes Must Be Created Separately
+## ⚠️ Important: Volume Configuration
 
-**Railway does NOT automatically create volumes from configuration files.**
+**If deploying from the official Railway Template:** Volume is auto-created ✅
 
-You have 2 options:
+**If deploying directly from GitHub:** Volume must be added manually ⚠️
+
+---
+
+## Deploying from Official Template (Recommended)
+
+Click the "Deploy to Railway" button → Volume is automatically created and mounted to `/data` ✅
+
+Then skip to **Step 3: Run Setup Wizard** below.
+
+---
+
+## Deploying from GitHub (Manual Setup Required)
+
+If you're deploying directly from the GitHub repo (not using the Railway Template), you have 2 options:
 
 ---
 
