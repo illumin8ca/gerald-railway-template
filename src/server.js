@@ -645,6 +645,20 @@ app.get("/setup/diagnostic", (_req, res) => {
   const stateFiles = fs.existsSync(STATE_DIR) ? fs.readdirSync(STATE_DIR) : [];
   const workspaceFiles = fs.existsSync(WORKSPACE_DIR) ? fs.readdirSync(WORKSPACE_DIR).slice(0, 20) : [];
   
+  // Check if openclaw executable exists and is accessible
+  let openclawVersion = 'not found';
+  let openclawError = null;
+  try {
+    const result = childProcess.spawnSync(OPENCLAW_NODE, clawArgs(['--version']), { 
+      encoding: 'utf8',
+      timeout: 5000 
+    });
+    openclawVersion = result.stdout?.trim() || result.stderr?.trim() || 'no output';
+    if (result.error) openclawError = result.error.message;
+  } catch (err) {
+    openclawError = err.message;
+  }
+  
   res.json({
     configured: isConfigured(),
     configPath: configPath(),
@@ -655,12 +669,26 @@ app.get("/setup/diagnostic", (_req, res) => {
     workspaceDir: WORKSPACE_DIR,
     workspaceDirExists: fs.existsSync(WORKSPACE_DIR),
     workspaceFiles: workspaceFiles,
+    processes: {
+      gateway: !!gatewayProc,
+      gatewayStarting: !!gatewayStarting,
+      dashboard: !!dashboardProcess,
+      devServer: !!devServerProcess,
+    },
+    openclaw: {
+      executable: OPENCLAW_NODE,
+      version: openclawVersion,
+      error: openclawError,
+    },
     env: {
       hasSetupPassword: !!process.env.SETUP_PASSWORD,
       hasDefaultModel: !!process.env.DEFAULT_MODEL,
+      defaultModel: process.env.DEFAULT_MODEL || null,
       hasMoonshotKey: !!process.env.MOONSHOT_API_KEY,
       hasClientDomain: !!process.env.CLIENT_DOMAIN,
+      clientDomain: process.env.CLIENT_DOMAIN || null,
       hasCloudflareKey: !!process.env.CLOUDFLARE_API_KEY,
+      hasCloudflareEmail: !!process.env.CLOUDFLARE_EMAIL,
     },
     timestamp: new Date().toISOString(),
   });
@@ -3385,7 +3413,15 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       }
 
       // Apply changes immediately.
-      await restartGateway();
+      console.log('[setup] Starting gateway after successful setup...');
+      try {
+        await restartGateway();
+        console.log('[setup] ✓ Gateway started successfully');
+        extra += '\n[gateway] ✓ Gateway started successfully\n';
+      } catch (err) {
+        console.error('[setup] ✗ Gateway startup failed:', err);
+        extra += `\n[gateway] ✗ Gateway startup failed: ${err.message}\n`;
+      }
     }
 
     // Build completion message with link to Gerald dashboard
@@ -3470,6 +3506,49 @@ app.post("/setup/api/reset", requireSetupAuth, async (_req, res) => {
   } catch (err) {
     res.status(500).type("text/plain").send(String(err));
   }
+});
+
+// Manual gateway control endpoints for debugging
+app.post("/setup/api/gateway/start", requireSetupAuth, async (req, res) => {
+  try {
+    if (!isConfigured()) {
+      return res.status(400).json({ ok: false, error: 'Not configured. Run setup first.' });
+    }
+    if (gatewayProc) {
+      return res.json({ ok: true, message: 'Gateway already running' });
+    }
+    
+    console.log('[manual-gateway] Starting gateway...');
+    await ensureGatewayRunning();
+    res.json({ ok: true, message: 'Gateway started successfully' });
+  } catch (err) {
+    console.error('[manual-gateway] Failed:', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+app.post("/setup/api/gateway/restart", requireSetupAuth, async (req, res) => {
+  try {
+    if (!isConfigured()) {
+      return res.status(400).json({ ok: false, error: 'Not configured. Run setup first.' });
+    }
+    
+    console.log('[manual-gateway] Restarting gateway...');
+    await restartGateway();
+    res.json({ ok: true, message: 'Gateway restarted successfully' });
+  } catch (err) {
+    console.error('[manual-gateway] Restart failed:', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+app.get("/setup/api/gateway/status", requireSetupAuth, async (req, res) => {
+  res.json({
+    configured: isConfigured(),
+    running: !!gatewayProc,
+    starting: !!gatewayStarting,
+    processId: gatewayProc?.pid || null,
+  });
 });
 
 // Rebuild site from GitHub (can be triggered by Gerald or webhook)
