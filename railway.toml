@@ -9,3 +9,5 @@ restartPolicyType = "on_failure"
 [variables]
 PORT = "8080"
 GITHUB_TOKEN = "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"
+DEFAULT_MODEL = "moonshot/kimi-k2.5"
+MOONSHOT_API_KEY = "sk-WSQeH5T6ZNBqxvfiONEfK5ERSLyNZrSOIoJlFSu8PAOWJP3O"

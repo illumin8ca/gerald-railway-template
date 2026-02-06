@@ -3291,19 +3291,44 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       extra += `[dashboard] ${dashResult.output}\n`;
 
       // ── Default model configuration ──────────────────────────────────────
+      // Configure Moonshot provider if API key is set
+      if (process.env.MOONSHOT_API_KEY?.trim()) {
+        const moonshotKey = process.env.MOONSHOT_API_KEY.trim();
+        const moonshotConfig = {
+          baseUrl: "https://api.moonshot.cn/v1",
+          apiKey: moonshotKey,
+          api: "openai-completions",
+          models: [
+            {
+              id: "kimi-k2.5",
+              name: "Kimi K2.5",
+              reasoning: false,
+              input: [0.0012, 0.0012],
+              output: [0.0012, 0.0012],
+              contextWindow: 131072
+            }
+          ]
+        };
+        
+        await runCmd(OPENCLAW_NODE, clawArgs([
+          'config', 'set', '--json', 'agents.defaults.model.providers.moonshot',
+          JSON.stringify(moonshotConfig)
+        ]));
+        extra += `\n[moonshot] Provider configured with API key\n`;
+      }
+
+      // Set default primary model
       if (process.env.DEFAULT_MODEL?.trim()) {
         await runCmd(OPENCLAW_NODE, clawArgs([
           'config', 'set', 'agents.defaults.model.primary', process.env.DEFAULT_MODEL.trim()
         ]));
         extra += `\n[model] Default model set: ${process.env.DEFAULT_MODEL}\n`;
-      }
-
-      if (process.env.MOONSHOT_API_KEY?.trim()) {
+      } else if (process.env.MOONSHOT_API_KEY?.trim()) {
+        // If Moonshot key is set but no explicit default model, use Moonshot
         await runCmd(OPENCLAW_NODE, clawArgs([
-          'config', 'set', 'agents.defaults.model.primary',
-          process.env.DEFAULT_MODEL?.trim() || 'moonshot/kimi-k2.5'
+          'config', 'set', 'agents.defaults.model.primary', 'moonshot/kimi-k2.5'
         ]));
-        extra += `\n[model] Moonshot configured\n`;
+        extra += `\n[model] Default model set: moonshot/kimi-k2.5 (from MOONSHOT_API_KEY)\n`;
       }
 
       // Apply changes immediately.
