@@ -4146,11 +4146,16 @@ app.use(async (req, res, next) => {
     // Production site: clientdomain.com or www.clientdomain.com
     if (host === clientDomain || host === `www.${clientDomain}`) {
       // For SSR sites, proxy to the production SSR server
-      if (isProdSSR() && prodServerProcess) {
+      const isSSR = isProdSSR();
+      const hasProcess = !!prodServerProcess;
+      console.log(`[routing] Production request: isSSR=${isSSR}, hasProcess=${hasProcess}, target=${PROD_SERVER_TARGET}`);
+      if (isSSR && hasProcess) {
+        console.log(`[routing] Proxying to prod-server at ${PROD_SERVER_TARGET}`);
         req._proxyTarget = 'prod-server';
         return proxy.web(req, res, { target: PROD_SERVER_TARGET });
       }
       // For static sites (or SSR fallback), serve static files
+      console.log(`[routing] Falling back to static: PRODUCTION_DIR=${PRODUCTION_DIR}`);
       return serveStaticSite(PRODUCTION_DIR, req, res);
     }
 
