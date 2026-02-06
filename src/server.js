@@ -213,6 +213,11 @@ const DEV_SERVER_PORT = 4321;
 const DEV_SERVER_TARGET = `http://127.0.0.1:${DEV_SERVER_PORT}`;
 let devServerProcess = null;
 
+// Production SSR server (for Astro/Next.js SSR sites)
+const PROD_SERVER_PORT = 4500;
+const PROD_SERVER_TARGET = `http://127.0.0.1:${PROD_SERVER_PORT}`;
+let prodServerProcess = null;
+
 // Gerald Dashboard
 const DASHBOARD_PORT = 3003;
 const DASHBOARD_TARGET = `http://127.0.0.1:${DASHBOARD_PORT}`;
@@ -1737,6 +1742,86 @@ function stopDevServer() {
   console.log('[dev-server] Stopping...');
   devServerProcess.kill('SIGTERM');
   devServerProcess = null;
+}
+
+// ── Production SSR server lifecycle ───────────────────────────────────
+// Detects if production site is SSR (has dist/server/entry.mjs) vs static
+function isProdSSR() {
+  return fs.existsSync(path.join(PRODUCTION_DIR, 'dist', 'server', 'entry.mjs'));
+}
+
+async function startProdServer() {
+  if (prodServerProcess) return;
+  if (!isProdSSR()) {
+    console.log('[prod-server] Not an SSR site, skipping');
+    return;
+  }
+  
+  console.log(`[prod-server] Starting SSR server on port ${PROD_SERVER_PORT}...`);
+
+  // Kill any stale processes on our port first
+  try {
+    const lsof = childProcess.execSync(`lsof -ti:${PROD_SERVER_PORT} 2>/dev/null || true`).toString().trim();
+    if (lsof) {
+      console.log(`[prod-server] Killing stale process on port ${PROD_SERVER_PORT}: ${lsof}`);
+      childProcess.execSync(`kill -9 ${lsof} 2>/dev/null || true`);
+      await new Promise(r => setTimeout(r, 500));
+    }
+  } catch {}
+
+  // Get client domain for SITE_URL
+  const clientDomain = getClientDomain();
+  const siteUrl = clientDomain ? `https://${clientDomain}` : `http://localhost:${PROD_SERVER_PORT}`;
+
+  // Start the Astro SSR server via start-server.js or dist/server/entry.mjs
+  const startScript = fs.existsSync(path.join(PRODUCTION_DIR, 'start-server.js'))
+    ? 'start-server.js'
+    : 'dist/server/entry.mjs';
+
+  prodServerProcess = childProcess.spawn('node', [startScript], {
+    cwd: PRODUCTION_DIR,
+    env: {
+      ...process.env,
+      PORT: String(PROD_SERVER_PORT),
+      HOST: '0.0.0.0',
+      NODE_ENV: 'production',
+      SITE_URL: siteUrl,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  prodServerProcess.stdout.on('data', (d) => console.log('[prod-server]', d.toString().trim()));
+  prodServerProcess.stderr.on('data', (d) => console.error('[prod-server]', d.toString().trim()));
+  prodServerProcess.on('close', (code) => {
+    console.log('[prod-server] Process exited with code', code);
+    prodServerProcess = null;
+  });
+
+  // Wait for it to be ready
+  for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, 1000));
+    try {
+      const res = await fetch(`http://127.0.0.1:${PROD_SERVER_PORT}/`);
+      if (res.ok || res.status === 304 || res.status === 404) {
+        console.log('[prod-server] Ready');
+        return;
+      }
+    } catch {}
+  }
+  console.warn('[prod-server] Timed out waiting for SSR server to start');
+}
+
+function stopProdServer() {
+  if (!prodServerProcess) return;
+  console.log('[prod-server] Stopping...');
+  prodServerProcess.kill('SIGTERM');
+  prodServerProcess = null;
+}
+
+async function restartProdServer() {
+  stopProdServer();
+  await new Promise(r => setTimeout(r, 1000));
+  await startProdServer();
 }
 
 async function restartDevServer() {
@@ -3661,6 +3746,12 @@ app.post('/api/rebuild', requireSetupAuth, async (req, res) => {
     if (target === 'production' || target === 'both') {
       const result = await cloneAndBuild(repoUrl, githubConfig.prodBranch, PRODUCTION_DIR, token);
       output += `Production (${githubConfig.prodBranch}): ${result.output}\n`;
+      
+      // For SSR sites, restart the production server
+      if (isProdSSR()) {
+        await restartProdServer();
+        output += 'Production SSR server restarted.\n';
+      }
     }
 
     if (target === 'dev' || target === 'both') {
@@ -4048,6 +4139,12 @@ app.use(async (req, res, next) => {
 
     // Production site: clientdomain.com or www.clientdomain.com
     if (host === clientDomain || host === `www.${clientDomain}`) {
+      // For SSR sites, proxy to the production SSR server
+      if (isProdSSR() && prodServerProcess) {
+        req._proxyTarget = 'prod-server';
+        return proxy.web(req, res, { target: PROD_SERVER_TARGET });
+      }
+      // For static sites (or SSR fallback), serve static files
       return serveStaticSite(PRODUCTION_DIR, req, res);
     }
 
@@ -4168,6 +4265,13 @@ const server = app.listen(PORT, () => {
     startDevServer()
       .then(() => console.log('[dev-server] ✓ auto-started'))
       .catch(err => console.error('[dev-server] ✗ auto-start failed:', err.message));
+  }
+
+  // Start production SSR server if site is SSR (background)
+  if (isProdSSR()) {
+    startProdServer()
+      .then(() => console.log('[prod-server] ✓ auto-started'))
+      .catch(err => console.error('[prod-server] ✗ auto-start failed:', err.message));
   }
 
   console.log(`[wrapper] ========== STARTUP COMPLETE ==========`);
