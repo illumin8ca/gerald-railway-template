@@ -214,7 +214,8 @@ const DEV_SERVER_TARGET = `http://127.0.0.1:${DEV_SERVER_PORT}`;
 let devServerProcess = null;
 
 // Production SSR server (for Astro/Next.js SSR sites)
-const PROD_SERVER_PORT = 4500;
+// Use a high port unlikely to conflict (Railway uses 8080, dev uses 4321, etc)
+const PROD_SERVER_PORT = 34567;
 const PROD_SERVER_TARGET = `http://127.0.0.1:${PROD_SERVER_PORT}`;
 let prodServerProcess = null;
 
