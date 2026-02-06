@@ -3616,6 +3616,30 @@ app.get("/setup/api/gateway/status", requireSetupAuth, async (req, res) => {
   });
 });
 
+// Manual dashboard control endpoints
+app.post("/setup/api/dashboard/start", requireSetupAuth, async (req, res) => {
+  try {
+    if (dashboardProcess) {
+      return res.json({ ok: true, message: 'Dashboard already running' });
+    }
+    
+    console.log('[manual-dashboard] Starting dashboard...');
+    await startDashboard();
+    res.json({ ok: true, message: 'Dashboard started successfully' });
+  } catch (err) {
+    console.error('[manual-dashboard] Failed:', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+app.get("/setup/api/dashboard/status", requireSetupAuth, async (req, res) => {
+  res.json({
+    running: !!dashboardProcess,
+    installed: fs.existsSync(path.join(DASHBOARD_DIR, 'package.json')),
+    processId: dashboardProcess?.pid || null,
+  });
+});
+
 // Rebuild site from GitHub (can be triggered by Gerald or webhook)
 app.post('/api/rebuild', requireSetupAuth, async (req, res) => {
   try {
