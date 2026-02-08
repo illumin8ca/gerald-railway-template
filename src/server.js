@@ -1988,6 +1988,12 @@ async function setupWorkspace(token) {
   // Fall back to OAuth or saved GitHub token if none provided
   if (!token) {
     token = getGitHubToken();
+    console.log('[workspace] Token lookup result:', token ? 'found' : 'NOT FOUND');
+    if (!token) {
+      console.log('[workspace] Checked locations:');
+      console.log('  -', path.join(STATE_DIR, 'github-oauth.json'), fs.existsSync(path.join(STATE_DIR, 'github-oauth.json')));
+      console.log('  -', path.join(os.homedir(), '.openclaw', 'github-oauth.json'), fs.existsSync(path.join(os.homedir(), '.openclaw', 'github-oauth.json')));
+    }
   }
 
   // Hardcoded Gerald workspace repo (like dashboard repo)
@@ -2003,6 +2009,7 @@ async function setupWorkspace(token) {
   if (!hasGitRepo) {
     console.log(`[workspace] Gerald workspace not found. Cloning from ${workspaceRepo}...`);
     console.log(`[workspace] Target directory: ${WORKSPACE_DIR}`);
+    console.log(`[workspace] Token available: ${token ? 'YES' : 'NO (public repo clone will fail if private)'}`);
     
     // Ensure parent directory exists
     fs.mkdirSync(path.dirname(WORKSPACE_DIR), { recursive: true });
@@ -2020,6 +2027,7 @@ async function setupWorkspace(token) {
     if (clone.code !== 0) {
       console.error('[workspace] ❌ Clone failed:', clone.output);
       console.error('[workspace] This means Gerald\'s memories (SOUL.md, skills, etc.) won\'t be available');
+      console.error('[workspace] To fix: Connect GitHub in the Dashboard UI to authenticate');
       return { ok: false, output: clone.output };
     }
     
