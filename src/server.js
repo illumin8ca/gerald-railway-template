@@ -2001,54 +2001,43 @@ async function setupWorkspace(token) {
   const hasGitRepo = fs.existsSync(path.join(WORKSPACE_DIR, '.git'));
   
   if (!hasGitRepo) {
-    console.log(`[workspace] Cloning workspace from ${workspaceRepo}...`);
-    // Don't remove existing workspace files, just init git
-    // First try to clone into a temp dir, then move files
-    const tempDir = path.join(STATE_DIR, 'workspace-temp');
-    await safeRemoveDir(tempDir);
+    console.log(`[workspace] Gerald workspace not found. Cloning from ${workspaceRepo}...`);
+    console.log(`[workspace] Target directory: ${WORKSPACE_DIR}`);
     
-    const clone = await runCmd('git', ['clone', '--depth', '1', authUrl, tempDir]);
+    // Ensure parent directory exists
+    fs.mkdirSync(path.dirname(WORKSPACE_DIR), { recursive: true });
+    
+    // Remove any partial/corrupted workspace directory
+    if (fs.existsSync(WORKSPACE_DIR)) {
+      console.log('[workspace] Removing incomplete workspace directory...');
+      await safeRemoveDir(WORKSPACE_DIR);
+    }
+    
+    // Clone directly into WORKSPACE_DIR (simpler than temp + move)
+    console.log('[workspace] Running git clone...');
+    const clone = await runCmd('git', ['clone', '--depth', '1', authUrl, WORKSPACE_DIR]);
+    
     if (clone.code !== 0) {
-      console.error('[workspace] Clone failed:', clone.output);
+      console.error('[workspace] ❌ Clone failed:', clone.output);
+      console.error('[workspace] This means Gerald\'s memories (SOUL.md, skills, etc.) won\'t be available');
       return { ok: false, output: clone.output };
     }
     
-    // Move git repo and files to workspace dir (preserving existing non-conflicting files)
-    fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+    console.log('[workspace] ✅ Successfully cloned Gerald workspace with memories and skills');
     
-    // Move .git directory
-    if (fs.existsSync(path.join(tempDir, '.git'))) {
-      fs.renameSync(path.join(tempDir, '.git'), path.join(WORKSPACE_DIR, '.git'));
-    }
+    // Verify key files exist
+    const soulExists = fs.existsSync(path.join(WORKSPACE_DIR, 'SOUL.md'));
+    const memoryExists = fs.existsSync(path.join(WORKSPACE_DIR, 'memory'));
+    console.log(`[workspace] Verification: SOUL.md=${soulExists}, memory/=${memoryExists}`);
     
-    // Copy files from temp to workspace (don't overwrite existing)
-    // Note: cp -n doesn't work on Alpine, use rsync or manual copy
-    try {
-      const files = fs.readdirSync(tempDir);
-      for (const file of files) {
-        if (file === '.git') continue; // Already moved
-        const src = path.join(tempDir, file);
-        const dest = path.join(WORKSPACE_DIR, file);
-        if (!fs.existsSync(dest)) {
-          fs.cpSync(src, dest, { recursive: true });
-        }
-      }
-    } catch (copyErr) {
-      console.warn('[workspace] Copy warning:', copyErr.message);
-    }
-    
-    await safeRemoveDir(tempDir);
-    console.log('[workspace] Workspace initialized from', workspaceRepo);
   } else {
     // Pull latest changes
-    console.log('[workspace] Updating workspace...');
+    console.log('[workspace] Updating Gerald workspace...');
     // Update remote URL in case token changed
     await runCmd('git', ['remote', 'set-url', 'origin', authUrl], { cwd: WORKSPACE_DIR });
     const pull = await runCmd('git', ['pull', '--ff-only', 'origin', 'main'], { cwd: WORKSPACE_DIR });
     if (pull.code !== 0) {
-      // Don't do fresh clone for workspace - might have local changes
       console.log('[workspace] Pull failed (may have local changes):', pull.output.split('\n')[0]);
-      // Try to at least fetch so we know what's available
       await runCmd('git', ['fetch', 'origin', 'main'], { cwd: WORKSPACE_DIR });
       return { ok: true, output: 'Workspace fetch complete (pull failed, may have local changes)' };
     } else {
