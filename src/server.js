@@ -4716,8 +4716,8 @@ app.post('/api/dashboard/gerald-update', async (req, res) => {
     // Pull latest changes
     const { output: pullOutput } = await runCmd('git', ['pull', 'origin', 'main'], { cwd: DASHBOARD_DIR });
 
-    // Rebuild the dashboard (use npx for Railway compatibility)
-    await runCmd('npx', ['vite', 'build'], { cwd: DASHBOARD_DIR });
+    // Rebuild the dashboard (use npm run build for proper dependency resolution)
+    await runCmd('npm', ['run', 'build'], { cwd: DASHBOARD_DIR });
 
     // Restart dashboard process
     if (dashboardProcess) {
