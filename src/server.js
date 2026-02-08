@@ -416,12 +416,62 @@ async function waitForGatewayReady(opts = {}) {
   return false;
 }
 
+// Fix invalid provider entries in openclaw.json that block `config set` commands.
+// Openclaw validates the entire config before writing any field -- a single invalid
+// provider (e.g. elevenlabs with missing baseUrl/models) causes ALL config writes to fail.
+function fixInvalidConfig() {
+  try {
+    const cfgPath = configPath();
+    if (!fs.existsSync(cfgPath)) return;
+    const config = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+    const providers = config?.models?.providers;
+    if (!providers || typeof providers !== "object") return;
+
+    let modified = false;
+    for (const [name, provider] of Object.entries(providers)) {
+      if (!provider || typeof provider !== "object") continue;
+      const missingBaseUrl = !provider.baseUrl || typeof provider.baseUrl !== "string";
+      const missingModels = !Array.isArray(provider.models);
+      if (missingBaseUrl || missingModels) {
+        console.log(`[config-fix] Removing invalid provider '${name}' (baseUrl: ${!missingBaseUrl}, models: ${!missingModels})`);
+        delete providers[name];
+        modified = true;
+      }
+    }
+
+    if (modified) {
+      fs.writeFileSync(cfgPath, JSON.stringify(config, null, 2));
+      console.log(`[config-fix] ✓ Fixed invalid config entries`);
+    }
+  } catch (err) {
+    console.warn(`[config-fix] Could not fix config: ${err.message}`);
+  }
+}
+
+// Write a value to openclaw.json directly, bypassing the CLI.
+// Used as a fallback when `openclaw config set` fails due to validation errors.
+function directConfigSet(keyPath, value) {
+  const cfgPath = configPath();
+  const config = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+  const keys = keyPath.split(".");
+  let obj = config;
+  for (let i = 0; i < keys.length - 1; i++) {
+    if (!obj[keys[i]] || typeof obj[keys[i]] !== "object") obj[keys[i]] = {};
+    obj = obj[keys[i]];
+  }
+  obj[keys[keys.length - 1]] = value;
+  fs.writeFileSync(cfgPath, JSON.stringify(config, null, 2));
+}
+
 async function startGateway() {
   if (gatewayProc) return;
   if (!isConfigured()) throw new Error("Gateway cannot start: not configured");
 
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+
+  // Fix any invalid config entries before attempting config writes
+  fixInvalidConfig();
 
   // Sync critical config before every gateway start.
   console.log(`[gateway] ========== GATEWAY START CONFIG SYNC ==========`);
@@ -489,6 +539,13 @@ async function startGateway() {
 
   if (syncResult.code !== 0) {
     console.error(`[gateway] ⚠️  WARNING: Token sync failed with code ${syncResult.code}`);
+    console.log(`[gateway] Falling back to direct JSON write for token...`);
+    try {
+      directConfigSet("gateway.auth.token", OPENCLAW_GATEWAY_TOKEN);
+      console.log(`[gateway] ✓ Token written directly to config JSON`);
+    } catch (err) {
+      console.error(`[gateway] ✗ Direct write also failed: ${err.message}`);
+    }
   }
 
   // Verify sync succeeded
@@ -1740,10 +1797,20 @@ async function startDevServer() {
 
   console.log(`[dev-server] Starting on port ${DEV_SERVER_PORT}...`);
 
+  // Ensure local node_modules/.bin is on PATH so binaries like `astro` are found
+  const devBinPath = path.join(DEV_DIR, 'node_modules', '.bin');
+  const devEnv = {
+    ...process.env,
+    PATH: `${devBinPath}:${process.env.PATH}`,
+    PORT: String(DEV_SERVER_PORT),
+    HOST: '0.0.0.0',
+    NODE_ENV: 'development',
+  };
+
   // Install deps if needed
   if (!fs.existsSync(path.join(DEV_DIR, 'node_modules'))) {
     console.log('[dev-server] Installing dependencies...');
-    await runCmd('npm', ['install'], { cwd: DEV_DIR });
+    await runCmd('npm', ['install'], { cwd: DEV_DIR, env: devEnv });
   }
 
   // Kill any stale dev servers on our port first
@@ -1758,12 +1825,7 @@ async function startDevServer() {
 
   devServerProcess = childProcess.spawn('npm', ['run', 'dev', '--', '--port', String(DEV_SERVER_PORT), '--host', '0.0.0.0'], {
     cwd: DEV_DIR,
-    env: {
-      ...process.env,
-      PORT: String(DEV_SERVER_PORT),
-      HOST: '0.0.0.0',
-      NODE_ENV: 'development',
-    },
+    env: devEnv,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
