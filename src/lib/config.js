@@ -137,17 +137,34 @@ export function fixInvalidConfig() {
     const providers = config?.models?.providers;
     if (providers && typeof providers === "object") {
       for (const [name, provider] of Object.entries(providers)) {
-        if (!provider || typeof provider !== "object") continue;
-        const missingBaseUrl =
-          !provider.baseUrl || typeof provider.baseUrl !== "string";
-        const missingModels = !Array.isArray(provider.models);
-        if (missingBaseUrl || missingModels) {
+        if (!provider || typeof provider !== "object") {
+          console.log(`[config-repair] Removing invalid provider '${name}' (not an object)`);
+          delete providers[name];
+          changed = true;
+          continue;
+        }
+        // Check for missing/invalid baseUrl
+        const hasValidBaseUrl =
+          provider.baseUrl &&
+          typeof provider.baseUrl === "string" &&
+          provider.baseUrl.trim() !== "" &&
+          provider.baseUrl !== "undefined";
+        // Check for valid models array
+        const hasValidModels =
+          Array.isArray(provider.models) && provider.models.length > 0;
+
+        if (!hasValidBaseUrl || !hasValidModels) {
           console.log(
-            `[config-repair] Removing invalid provider '${name}' (baseUrl: ${!missingBaseUrl}, models: ${!missingModels})`,
+            `[config-repair] Removing invalid provider '${name}' (baseUrl: ${hasValidBaseUrl}, models: ${hasValidModels})`,
           );
           delete providers[name];
           changed = true;
         }
+      }
+      // Clean up empty providers object
+      if (Object.keys(providers).length === 0) {
+        delete config.models.providers;
+        changed = true;
       }
     }
 
