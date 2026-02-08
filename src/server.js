@@ -2202,7 +2202,13 @@ const GITHUB_CLIENT_SECRET = 'c593ee8eaeae73a1dca655bad285e7a2ff657261';
 
 // Helper to get GitHub token (OAuth or manual)
 function getGitHubToken() {
-  // First check OAuth token in STATE_DIR (Railway template location)
+  // First check env var (admin deployments)
+  if (process.env.GITHUB_TOKEN) {
+    console.log('[github] Using GITHUB_TOKEN from environment variable');
+    return process.env.GITHUB_TOKEN;
+  }
+
+  // Check OAuth token in STATE_DIR (Railway template location)
   const oauthPath = path.join(STATE_DIR, 'github-oauth.json');
   if (fs.existsSync(oauthPath)) {
     try {
