@@ -53,6 +53,21 @@ export function serveStaticSite(dir, req, res) {
   if (fs.existsSync(placeholderPath)) {
     return res.status(200).sendFile(placeholderPath);
   }
+
+  // SPA catch-all: serve index.html for client-side routes
+  // This handles direct URL access to routes like /about, /blog/post, etc.
+  // that are handled by the SPA's client-side router
+  const indexPath = path.join(dir, "index.html");
+  if (fs.existsSync(indexPath)) {
+    // Don't serve index.html for API paths, static assets, or files with extensions
+    const isApiPath = reqPath.startsWith("/api/") || reqPath.startsWith("/_astro/");
+    const isStaticAsset = path.extname(reqPath) !== "" && !reqPath.endsWith(".html");
+    if (!isApiPath && !isStaticAsset) {
+      console.log(`[static] SPA catch-all: serving index.html for ${reqPath}`);
+      return res.sendFile(indexPath);
+    }
+  }
+
   return res.status(404).send("Not found");
 }
 
