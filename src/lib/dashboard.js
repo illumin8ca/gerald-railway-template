@@ -373,7 +373,9 @@ export async function startDashboard(OPENCLAW_GATEWAY_TOKEN) {
         TELEGRAM_BOT_TOKEN:
           telegramBotToken || process.env.TELEGRAM_BOT_TOKEN || "",
         SENDGRID_API_KEY: process.env.SENDGRID_API_KEY || "",
-        SENDGRID_SENDER_EMAIL: process.env.SENDGRID_SENDER_EMAIL || "",
+        SENDGRID_SENDER_EMAIL: process.env.SENDGRID_SENDER_EMAIL
+          || (getClientDomain() ? `noreply@${getClientDomain()}` : "")
+          || (process.env.RAILWAY_PUBLIC_DOMAIN ? `noreply@${process.env.RAILWAY_PUBLIC_DOMAIN}` : ""),
         CLIENT_DOMAIN: getClientDomain() || "",
         ALLOWED_EMAILS: process.env.DEFAULT_ALLOWED_EMAILS || "",
       },
