@@ -14,23 +14,9 @@
 # 4. Size: 1GB (minimum)
 
 [build]
-builder = "dockerfile"
+builder = "DOCKERFILE"
 
 [deploy]
 healthcheckPath = "/setup/healthz"
 healthcheckTimeout = 300
-restartPolicyType = "on_failure"
-
-# IMPORTANT: Most variables are now Railway Shared Variables
-# Only CLIENT_DOMAIN needs to be set per-deployment
-# Shared variables (already configured in Railway):
-#   - GITHUB_TOKEN
-#   - DEFAULT_MODEL  
-#   - MOONSHOT_API_KEY
-#   - SENDGRID_API_KEY
-#   - CLOUDFLARE_API_KEY
-#   - CLOUDFLARE_EMAIL
-#   - SETUP_PASSWORD
-
-[variables]
-PORT = "8080"
+restartPolicyType = "ON_FAILURE"
