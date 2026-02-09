@@ -1,84 +1,124 @@
-# Openclaw Railway Template (1‑click deploy)
+# Gerald Railway Template
 
-This repo packages **Openclaw** for Railway with a small **/setup** web wizard so users can deploy and onboard **without running any commands**.
+One-click Railway deployment for [OpenClaw](https://github.com/openclaw/openclaw), an AI coding assistant platform. Provides a web setup wizard, reverse proxy, persistent state, and multi-service orchestration in a single container.
 
-## What you get
+## What You Get
 
-- **Openclaw Gateway + Control UI** (served at `/` and `/openclaw`)
-- A friendly **Setup Wizard** at `/setup` (protected by a password)
-- Persistent state via **Railway Volume** (so config/credentials/memory survive redeploys)
-- One-click **Export backup** (so users can migrate off Railway later)
+- **OpenClaw Gateway + Control UI** at `/` and `/openclaw`
+- **Setup Wizard** at `/setup` (password-protected)
+- **Gerald Dashboard** at `gerald.yourdomain.com` (Telegram login)
+- **Live Dev Server** at `dev.yourdomain.com` (Astro HMR)
+- **Production Static Hosting** at `yourdomain.com`
+- **Persistent state** via Railway Volume (survives redeploys)
+- **Auto DNS setup** via Cloudflare API
+- **Auto rebuild** via GitHub push webhooks
 
-## How it works (high level)
+## Quick Start
 
-- The container runs a wrapper web server.
-- The wrapper protects `/setup` with `SETUP_PASSWORD`.
-- During setup, the wrapper runs `openclaw onboard --non-interactive ...` inside the container, writes state to the volume, and then starts the gateway.
-- After setup, **`/` is Openclaw**. The wrapper reverse-proxies all traffic (including WebSockets) to the local gateway process.
+### Deploy to Railway
 
-## Railway deploy instructions (what you’ll publish as a Template)
+1. Click **Deploy to Railway** from the template
+2. Add a **Volume** mounted at `/data` (1 GB min)
+3. Set `SETUP_PASSWORD` and `CLIENT_DOMAIN` in variables
+4. Visit `https://<your-app>.up.railway.app/setup`
+5. Complete the wizard
 
-In Railway Template Composer:
+See [docs/06-deployment/railway-deployment.md](./docs/06-deployment/railway-deployment.md) for the full guide.
 
-1. Create a new template from this GitHub repo.
-2. Add a **Volume** mounted at `/data`.
-3. Set the following variables:
-
-Required:
-
-- `SETUP_PASSWORD` — user-provided password to access `/setup`
-
-Recommended:
-
-- `OPENCLAW_STATE_DIR=/data/.openclaw`
-- `OPENCLAW_WORKSPACE_DIR=/data/workspace`
-
-Optional:
-
-- `OPENCLAW_GATEWAY_TOKEN` — if not set, the wrapper generates one (not ideal). In a template, set it using a generated secret.
-
-Notes:
-
-- This template pins Openclaw to a known-good version by default via Docker build arg `OPENCLAW_VERSION`.
-
-4. Enable **Public Networking** (HTTP). Railway will assign a domain.
-5. Deploy.
-
-Then:
-
-- Visit `https://<your-app>.up.railway.app/setup`
-- Complete setup
-- Visit `https://<your-app>.up.railway.app/` and `/openclaw`
-
-## Getting chat tokens (so you don’t have to scramble)
-
-### Telegram bot token
-
-1. Open Telegram and message **@BotFather**
-2. Run `/newbot` and follow the prompts
-3. BotFather will give you a token that looks like: `123456789:AA...`
-4. Paste that token into `/setup`
-
-### Discord bot token
-
-1. Go to the Discord Developer Portal: https://discord.com/developers/applications
-2. **New Application** → pick a name
-3. Open the **Bot** tab → **Add Bot**
-4. Copy the **Bot Token** and paste it into `/setup`
-5. Invite the bot to your server (OAuth2 URL Generator → scopes: `bot`, `applications.commands`; then choose permissions)
-
-## Local smoke test
+### Local Development
 
 ```bash
-docker build -t openclaw-railway-template .
-
+# Docker build + run
+docker build -t gerald-railway-template .
 docker run --rm -p 8080:8080 \
   -e PORT=8080 \
   -e SETUP_PASSWORD=test \
   -e OPENCLAW_STATE_DIR=/data/.openclaw \
   -e OPENCLAW_WORKSPACE_DIR=/data/workspace \
   -v $(pwd)/.tmpdata:/data \
-  openclaw-railway-template
+  gerald-railway-template
 
-# open http://localhost:8080/setup (password: test)
+# Visit http://localhost:8080/setup (password: test)
 ```
+
+### Development Commands
+
+| Command | Description |
+|---|---|
+| `npm run dev` | Start wrapper locally (needs OpenClaw at `/openclaw` or `OPENCLAW_ENTRY` set) |
+| `npm start` | Production start |
+| `npm run lint` | Syntax check (`node -c src/server.js`) |
+| `npm run smoke` | Docker smoke test |
+
+## Architecture
+
+Four services in one container, orchestrated by an Express wrapper:
+
+| Service | Port | Purpose |
+|---|---|---|
+| **Wrapper** | 8080 | Public entry point, host-based routing, proxy |
+| **Gateway** | 18789 | OpenClaw AI agent runtime |
+| **Dashboard** | 3003 | Gerald web UI |
+| **Dev Server** | 4321 | Live Astro dev with HMR |
+
+The wrapper inspects `req.hostname` and routes:
+- `yourdomain.com` -> static production files
+- `dev.yourdomain.com` -> dev server (port 4321)
+- `gerald.yourdomain.com` -> dashboard (port 3003)
+- `*.up.railway.app` -> gateway (port 18789)
+
+See [docs/01-architecture/architecture.md](./docs/01-architecture/architecture.md) for the full design.
+
+## Project Structure
+
+```
+gerald-railway-template/
+├── src/
+│   ├── server.js          # Main Express app (~110KB)
+│   ├── lib/               # Extracted modules (config, gateway, dashboard, etc.)
+│   ├── public/            # Setup wizard frontend (HTML, CSS, JS)
+│   └── templates/         # Client skill templates
+├── scripts/
+│   ├── smoke.js           # Docker smoke test
+│   └── clone-website-repo.sh
+├── docs/                  # Organized documentation (numbered folders)
+├── Dockerfile             # Multi-stage build (OpenClaw from source + runtime)
+├── railway.toml           # Railway config-as-code (DOCKERFILE builder)
+├── .env.example           # All environment variables documented
+└── package.json           # pnpm, node >=22
+```
+
+## Environment Variables
+
+**Required:** `SETUP_PASSWORD`
+
+**Recommended:** `DEFAULT_MODEL`, `MOONSHOT_API_KEY`, `GITHUB_TOKEN`, `SENDGRID_API_KEY`, `CLOUDFLARE_API_KEY`, `CLOUDFLARE_EMAIL`
+
+**Per-deployment:** `CLIENT_DOMAIN`
+
+See [.env.example](./.env.example) for the full list with descriptions.
+
+## Documentation
+
+| Topic | Location |
+|---|---|
+| Architecture & system design | [docs/01-architecture/](./docs/01-architecture/) |
+| CLI authentication (Claude/Codex) | [docs/02-setup-guides/](./docs/02-setup-guides/) |
+| Developer workflow & branching | [docs/03-development/](./docs/03-development/) |
+| Railway deployment & template config | [docs/06-deployment/](./docs/06-deployment/) |
+| Operations & troubleshooting | [docs/07-operations/](./docs/07-operations/) |
+| AI agent instructions | [AGENTS.md](./AGENTS.md) |
+
+## Troubleshooting
+
+| Issue | Solution |
+|---|---|
+| Config lost after redeploy | Add persistent volume at `/data` |
+| Gateway won't start | Check `[gateway]` and `[token]` in Railway logs |
+| HMR not working on dev site | Check WebSocket proxy: `railway logs \| grep '[ws-upgrade]'` |
+| Dashboard login fails | Verify `ALLOWED_TELEGRAM_IDS` includes your Telegram user ID |
+| Build fails (esbuild) | Wrapper auto-handles; check `[build]` logs if persistent |
+
+## License
+
+[MIT](./LICENSE)
