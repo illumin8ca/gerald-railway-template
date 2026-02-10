@@ -19,6 +19,11 @@ import { clawArgs, runCmd, sleep } from "./helpers.js";
 
 let gatewayProc = null;
 let gatewayStarting = null;
+let lastGatewayToken = null;
+let crashCount = 0;
+let lastCrashTime = 0;
+const MAX_CRASH_RESTARTS = 5;
+const CRASH_WINDOW_MS = 300_000; // 5 minutes
 
 export function getGatewayProc() {
   return gatewayProc;
@@ -280,9 +285,37 @@ export async function startGateway(OPENCLAW_GATEWAY_TOKEN) {
     gatewayProc = null;
   });
 
+  // Store token for auto-restart
+  lastGatewayToken = OPENCLAW_GATEWAY_TOKEN;
+
   gatewayProc.on("exit", (code, signal) => {
     console.error(`[gateway] exited code=${code} signal=${signal}`);
     gatewayProc = null;
+
+    // Auto-restart on unexpected crash (not SIGTERM/SIGINT = intentional stop)
+    if (signal !== 'SIGTERM' && signal !== 'SIGINT' && code !== 0 && lastGatewayToken) {
+      const now = Date.now();
+      if (now - lastCrashTime > CRASH_WINDOW_MS) {
+        crashCount = 0; // Reset crash counter outside window
+      }
+      lastCrashTime = now;
+      crashCount++;
+
+      if (crashCount <= MAX_CRASH_RESTARTS) {
+        const delayMs = Math.min(2000 * Math.pow(2, crashCount - 1), 30000);
+        console.log(`[gateway] Auto-restart in ${delayMs}ms (crash ${crashCount}/${MAX_CRASH_RESTARTS})`);
+        setTimeout(async () => {
+          try {
+            console.log(`[gateway] Auto-restarting after crash...`);
+            await startGateway(lastGatewayToken);
+          } catch (err) {
+            console.error(`[gateway] Auto-restart failed: ${err.message}`);
+          }
+        }, delayMs);
+      } else {
+        console.error(`[gateway] Too many crashes (${crashCount}) in ${CRASH_WINDOW_MS / 1000}s — not restarting. Use /setup/api/config/repair or /setup/api/gateway/restart to recover.`);
+      }
+    }
   });
 }
 

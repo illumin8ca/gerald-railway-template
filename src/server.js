@@ -1980,6 +1980,40 @@ app.get("/setup/api/gateway/status", requireSetupAuth, async (req, res) => {
   });
 });
 
+// Config repair endpoint — diagnose and fix invalid config entries
+app.post("/setup/api/config/repair", requireSetupAuth, async (req, res) => {
+  try {
+    const dryRun = req.body?.dryRun === true;
+    const result = fixInvalidConfig(dryRun);
+    
+    if (!dryRun && result.repaired) {
+      console.log('[config-repair] Restarting gateway with repaired config...');
+      try {
+        await restartGateway(OPENCLAW_GATEWAY_TOKEN);
+        result.gatewayRestarted = true;
+      } catch (err) {
+        result.gatewayRestarted = false;
+        result.restartError = err.message;
+      }
+    }
+    
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('[config-repair] API error:', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+app.get("/setup/api/config/repair", requireSetupAuth, async (req, res) => {
+  // GET = dry run (diagnose only, no changes)
+  try {
+    const result = fixInvalidConfig(true);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
 // Manual dashboard control endpoints
 app.post("/setup/api/dashboard/start", requireSetupAuth, async (req, res) => {
   try {

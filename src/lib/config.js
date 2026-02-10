@@ -125,69 +125,148 @@ export function getGitHubToken() {
 
 // ── Config repair helpers ─────────────────────────────────────────────
 
-export function fixInvalidConfig() {
+// Known provider base URLs for auto-repair
+const KNOWN_BASE_URLS = {
+  'openai': 'https://api.openai.com/v1',
+  'anthropic': 'https://api.anthropic.com',
+  'google': 'https://generativelanguage.googleapis.com/v1beta',
+  'deepseek': 'https://api.deepseek.com/v1',
+  'moonshot': 'https://api.moonshot.ai/v1',
+  'minimax': 'https://api.minimax.chat/v1',
+  'perplexity': 'https://api.perplexity.ai',
+  'openrouter': 'https://openrouter.ai/api/v1',
+  'elevenlabs': 'https://api.elevenlabs.io/v1',
+  'mistral': 'https://api.mistral.ai/v1',
+  'groq': 'https://api.groq.com/openai/v1',
+  'together': 'https://api.together.xyz/v1',
+  'fireworks': 'https://api.fireworks.ai/inference/v1',
+  'cohere': 'https://api.cohere.ai/v1',
+};
+
+function guessBaseUrl(providerName) {
+  const normalized = providerName.toLowerCase().replace(/[-_\s]/g, '');
+  for (const [key, url] of Object.entries(KNOWN_BASE_URLS)) {
+    if (normalized.includes(key) || key.includes(normalized)) return url;
+  }
+  return null;
+}
+
+/**
+ * Repair invalid OpenClaw config. Called before every gateway start.
+ * 
+ * Strategy: fix what we can, remove only what's truly broken.
+ * - Missing 'models' array → add empty array (gateway tolerates this)
+ * - Missing 'baseUrl' with API key → auto-fill for known providers
+ * - Missing 'baseUrl' for unknown provider → remove (can't guess)
+ * - Empty provider (no apiKey, no baseUrl, no models) → remove
+ * - Invalid auth profiles (e.g. elevenlabs) → remove
+ * 
+ * @param {boolean} dryRun - If true, only diagnose without making changes
+ * @returns {{ repaired: boolean, issues: string[] }}
+ */
+export function fixInvalidConfig(dryRun = false) {
   const cfgPath = configPath();
-  if (!fs.existsSync(cfgPath)) return;
+  if (!fs.existsSync(cfgPath)) return { repaired: false, issues: [] };
+
+  let config;
   try {
-    const content = fs.readFileSync(cfgPath, "utf8");
-    const config = JSON.parse(content);
-    let changed = false;
+    config = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+  } catch (err) {
+    console.warn("[config-repair] Could not parse config:", err.message);
+    return { repaired: false, issues: [`Parse error: ${err.message}`] };
+  }
 
-    // Remove invalid model providers that break `openclaw config set`
-    const providers = config?.models?.providers;
-    if (providers && typeof providers === "object") {
-      for (const [name, provider] of Object.entries(providers)) {
-        if (!provider || typeof provider !== "object") {
-          console.log(`[config-repair] Removing invalid provider '${name}' (not an object)`);
-          delete providers[name];
-          changed = true;
-          continue;
-        }
-        // Check for missing/invalid baseUrl
-        const hasValidBaseUrl =
-          provider.baseUrl &&
-          typeof provider.baseUrl === "string" &&
-          provider.baseUrl.trim() !== "" &&
-          provider.baseUrl !== "undefined";
-        // Check for valid models array
-        const hasValidModels =
-          Array.isArray(provider.models) && provider.models.length > 0;
+  const issues = [];
+  let changed = false;
 
-        if (!hasValidBaseUrl || !hasValidModels) {
-          console.log(
-            `[config-repair] Removing invalid provider '${name}' (baseUrl: ${hasValidBaseUrl}, models: ${hasValidModels})`,
-          );
-          delete providers[name];
-          changed = true;
-        }
-      }
-      // Clean up empty providers object
-      if (Object.keys(providers).length === 0) {
-        delete config.models.providers;
+  // --- Repair model providers ---
+  const providers = config?.models?.providers;
+  if (providers && typeof providers === "object") {
+    for (const [name, provider] of Object.entries(providers)) {
+      if (!provider || typeof provider !== "object") {
+        issues.push(`Provider '${name}': not an object — removing`);
+        if (!dryRun) delete providers[name];
         changed = true;
+        continue;
+      }
+
+      const hasApiKey = !!(provider.apiKey && typeof provider.apiKey === 'string' && provider.apiKey.trim());
+      const hasValidBaseUrl = !!(provider.baseUrl && typeof provider.baseUrl === 'string' 
+        && provider.baseUrl.trim() && provider.baseUrl !== 'undefined');
+      const hasValidModels = Array.isArray(provider.models);
+
+      // Empty provider with nothing useful — remove
+      if (!hasApiKey && !hasValidBaseUrl && !hasValidModels) {
+        issues.push(`Provider '${name}': completely empty — removing`);
+        if (!dryRun) delete providers[name];
+        changed = true;
+        continue;
+      }
+
+      // Fix missing models array (gateway schema requires it)
+      if (!hasValidModels) {
+        issues.push(`Provider '${name}': missing 'models' array — adding empty array`);
+        if (!dryRun) provider.models = [];
+        changed = true;
+      }
+
+      // Fix missing baseUrl
+      if (!hasValidBaseUrl) {
+        if (hasApiKey) {
+          // Try to auto-fill from known providers
+          const guessed = guessBaseUrl(name);
+          if (guessed) {
+            issues.push(`Provider '${name}': missing 'baseUrl' — setting to '${guessed}'`);
+            if (!dryRun) provider.baseUrl = guessed;
+            changed = true;
+          } else {
+            // Unknown provider with API key but no baseUrl — remove (can't function)
+            issues.push(`Provider '${name}': missing 'baseUrl' (unknown provider) — removing`);
+            if (!dryRun) delete providers[name];
+            changed = true;
+          }
+        }
+        // Provider with models but no apiKey and no baseUrl is fine if it's a built-in
       }
     }
 
-    // Remove invalid auth profiles that can also break config writes
-    if (config.auth?.profiles) {
-      for (const [key, profile] of Object.entries(config.auth.profiles)) {
-        if (profile?.provider === "elevenlabs") {
-          console.log(
-            `[config-repair] Removing invalid profile '${key}' with provider 'elevenlabs'`,
-          );
+    // Clean up empty providers object
+    if (!dryRun && Object.keys(providers).length === 0) {
+      delete config.models.providers;
+      changed = true;
+    }
+  }
+
+  // --- Repair auth profiles ---
+  if (config.auth?.profiles) {
+    for (const [key, profile] of Object.entries(config.auth.profiles)) {
+      if (profile?.provider === "elevenlabs") {
+        issues.push(`Auth profile '${key}': invalid provider 'elevenlabs' — removing`);
+        if (!dryRun) {
           delete config.auth.profiles[key];
           changed = true;
         }
       }
     }
-
-    if (changed) {
-      fs.writeFileSync(cfgPath, JSON.stringify(config, null, 2));
-      console.log("[config-repair] Fixed invalid config entries");
-    }
-  } catch (err) {
-    console.warn("[config-repair] Could not fix config:", err.message);
   }
+
+  // --- Write repaired config ---
+  if (changed && !dryRun) {
+    // Create backup before writing
+    const backupPath = `${cfgPath}.pre-repair`;
+    try { fs.copyFileSync(cfgPath, backupPath); } catch {}
+    
+    fs.writeFileSync(cfgPath, JSON.stringify(config, null, 2), { mode: 0o600 });
+    console.log(`[config-repair] ✓ Repaired ${issues.length} issues (backup: ${backupPath})`);
+  } else if (issues.length === 0) {
+    console.log("[config-repair] ✓ Config is clean — no repairs needed");
+  }
+
+  for (const issue of issues) {
+    console.log(`[config-repair]   • ${issue}`);
+  }
+
+  return { repaired: changed && !dryRun, issues };
 }
 
 export function directConfigSet(keyPath, value) {
