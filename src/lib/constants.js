@@ -9,7 +9,7 @@ export const STATE_DIR =
 
 export const WORKSPACE_DIR =
   process.env.OPENCLAW_WORKSPACE_DIR?.trim() ||
-  path.join(STATE_DIR, "workspace");
+  path.join(os.homedir(), "workspace");
 
 // Illumin8 site directories
 export const SITE_DIR = path.join(WORKSPACE_DIR, 'site');
