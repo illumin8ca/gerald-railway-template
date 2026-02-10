@@ -37,6 +37,10 @@ RUN pnpm build
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:install && pnpm ui:build
 
+# Patch WS maxPayload: 512KB → 10MB (upstream issue #10243)
+COPY scripts/patch-ws-maxpayload.js /tmp/patch-ws-maxpayload.js
+RUN OPENCLAW_DIST=/openclaw/dist node /tmp/patch-ws-maxpayload.js && rm /tmp/patch-ws-maxpayload.js
+
 
 # Runtime image
 FROM node:22-bookworm
