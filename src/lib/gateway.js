@@ -331,12 +331,55 @@ export async function ensureGatewayRunning(OPENCLAW_GATEWAY_TOKEN) {
           "Gateway did not become ready in time (5 min timeout)",
         );
       }
+      // Index workspace for qmd search (background, non-blocking)
+      indexWorkspaceForQmd().catch(err => console.warn('[qmd] indexing failed:', err.message));
     })().finally(() => {
       gatewayStarting = null;
     });
   }
   await gatewayStarting;
   return { ok: true };
+}
+
+// ── qmd: Index workspace markdown files for local search ──────────────
+async function indexWorkspaceForQmd() {
+  const qmdBin = '/root/.bun/bin/qmd';
+  if (!fs.existsSync(qmdBin)) {
+    console.log('[qmd] binary not found, skipping workspace indexing');
+    return;
+  }
+  if (!fs.existsSync(WORKSPACE_DIR)) {
+    console.log('[qmd] workspace dir not found, skipping');
+    return;
+  }
+
+  const execOpts = {
+    env: { ...process.env, PATH: `/root/.bun/bin:${process.env.PATH}`, XDG_CACHE_HOME: '/data/.cache' },
+    timeout: 120_000,
+  };
+
+  // Check if workspace collection already exists
+  try {
+    const status = childProcess.execSync('qmd collection list 2>&1', execOpts).toString();
+    if (status.includes('workspace')) {
+      console.log('[qmd] workspace collection exists, updating index...');
+      childProcess.execSync('qmd update', execOpts);
+      console.log('[qmd] index updated');
+      return;
+    }
+  } catch {}
+
+  // Create workspace collection
+  console.log(`[qmd] creating workspace collection: ${WORKSPACE_DIR}`);
+  try {
+    childProcess.execSync(
+      `qmd collection add "${WORKSPACE_DIR}" --name workspace --mask "**/*.md"`,
+      execOpts,
+    );
+    console.log('[qmd] workspace collection created and indexed');
+  } catch (err) {
+    console.warn('[qmd] failed to create collection:', err.message);
+  }
 }
 
 export async function restartGateway(OPENCLAW_GATEWAY_TOKEN) {

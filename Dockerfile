@@ -78,6 +78,11 @@ USER root
 RUN chown -R root:root /home/linuxbrew/.linuxbrew
 ENV PATH="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:${PATH}"
 
+# Install Bun + qmd (local markdown search for workspace files)
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:${PATH}"
+RUN bun install -g https://github.com/tobi/qmd
+
 # Install Claude Code CLI and Codex CLI
 RUN npm install -g @anthropic-ai/claude-code@latest @openai/codex@latest
 
