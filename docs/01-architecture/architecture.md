@@ -343,7 +343,7 @@ dashboardProcess = childProcess.spawn('node', ['server/index.js'], {
     OPENCLAW_GATEWAY_TOKEN: OPENCLAW_GATEWAY_TOKEN,
     INTERNAL_API_KEY: INTERNAL_API_KEY,
     JWT_SECRET: dashboardJwtSecret,
-    ALLOWED_TELEGRAM_IDS: process.env.ALLOWED_TELEGRAM_IDS || '511172388',
+    ALLOWED_TELEGRAM_IDS: process.env.ALLOWED_TELEGRAM_IDS || 'YOUR_TELEGRAM_ID',
     TELEGRAM_BOT_TOKEN: telegramBotToken,
     // ... more env vars
   },

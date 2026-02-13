@@ -368,7 +368,7 @@ export async function startDashboard(OPENCLAW_GATEWAY_TOKEN) {
         INTERNAL_API_KEY,
         JWT_SECRET: process.env.JWT_SECRET || dashboardJwtSecret,
         ALLOWED_TELEGRAM_IDS:
-          process.env.ALLOWED_TELEGRAM_IDS || "511172388",
+          process.env.ALLOWED_TELEGRAM_IDS || "",
         TELEGRAM_BOT_ID: process.env.TELEGRAM_BOT_ID || "",
         TELEGRAM_BOT_TOKEN:
           telegramBotToken || process.env.TELEGRAM_BOT_TOKEN || "",

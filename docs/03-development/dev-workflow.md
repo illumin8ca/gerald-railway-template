@@ -477,7 +477,7 @@ The wizard will:
 
 2. Add your Telegram user ID:
    ```bash
-   railway variables set ALLOWED_TELEGRAM_IDS="511172388,123456789"
+   railway variables set ALLOWED_TELEGRAM_IDS="YOUR_TELEGRAM_ID,123456789"
    ```
 
 3. Restart deployment:
@@ -622,7 +622,7 @@ git reset --hard <commit-hash>
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `ALLOWED_TELEGRAM_IDS` | `511172388` | Who can log in to Dashboard |
+| `ALLOWED_TELEGRAM_IDS` | `YOUR_TELEGRAM_ID` | Who can log in to Dashboard |
 | `INTERNAL_API_KEY` | (auto-generated) | Dashboard → Gateway auth |
 | `JWT_SECRET` | (auto-generated) | Dashboard session signing |
 
