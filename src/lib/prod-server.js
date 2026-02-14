@@ -51,8 +51,18 @@ export async function startProdServer(retryCount = 0) {
   // Ensure node_modules is available for SSR runtime dependencies
   try {
     const prodNodeModules = path.join(PRODUCTION_DIR, "node_modules");
+    const prodPackageJson = path.join(PRODUCTION_DIR, "package.json");
     const rootNodeModules = path.join(process.cwd(), "node_modules");
-    if (
+
+    // If production has a package.json, npm install there
+    if (fs.existsSync(prodPackageJson)) {
+      console.log("[prod-server] Installing dependencies in production dir...");
+      childProcess.execSync(`cd "${PRODUCTION_DIR}" && npm install --legacy-peer-deps 2>&1`, {
+        stdio: "pipe",
+      });
+    }
+    // Otherwise copy from root if available
+    else if (
       !fs.existsSync(prodNodeModules) &&
       fs.existsSync(rootNodeModules)
     ) {
@@ -60,7 +70,7 @@ export async function startProdServer(retryCount = 0) {
       childProcess.execSync(`cp -r "${rootNodeModules}" "${prodNodeModules}"`);
     }
   } catch (e) {
-    console.warn("[prod-server] Failed to copy node_modules:", e.message);
+    console.warn("[prod-server] Failed to ensure dependencies:", e.message);
   }
 
   const clientDomain = getClientDomain();
