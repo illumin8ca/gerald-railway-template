@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -7,9 +8,22 @@ export const STATE_DIR =
   process.env.OPENCLAW_STATE_DIR?.trim() ||
   path.join(os.homedir(), ".openclaw");
 
-export const WORKSPACE_DIR =
-  process.env.OPENCLAW_WORKSPACE_DIR?.trim() ||
-  path.join(STATE_DIR, "workspace");
+// Support both /data/workspace (Railway volume) and /data/.openclaw/workspace (default)
+function resolveWorkspaceDir() {
+  // Check env var first
+  if (process.env.OPENCLAW_WORKSPACE_DIR?.trim()) {
+    return process.env.OPENCLAW_WORKSPACE_DIR.trim();
+  }
+  // Check if /data/workspace exists (Railway volume mount)
+  const railwayWorkspace = "/data/workspace";
+  if (fs.existsSync(railwayWorkspace)) {
+    return railwayWorkspace;
+  }
+  // Default to state dir
+  return path.join(STATE_DIR, "workspace");
+}
+
+export const WORKSPACE_DIR = resolveWorkspaceDir();
 
 // Illumin8 site directories
 export const SITE_DIR = path.join(WORKSPACE_DIR, 'site');
