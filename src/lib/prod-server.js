@@ -2,7 +2,7 @@ import childProcess from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-import { PRODUCTION_DIR, PROD_SERVER_PORT } from "./constants.js";
+import { PRODUCTION_DIR, DEV_DIR, PROD_SERVER_PORT } from "./constants.js";
 import { getClientDomain } from "./config.js";
 
 let prodServerProcess = null;
@@ -51,23 +51,28 @@ export async function startProdServer(retryCount = 0) {
   // Ensure node_modules is available for SSR runtime dependencies
   try {
     const prodNodeModules = path.join(PRODUCTION_DIR, "node_modules");
-    const prodPackageJson = path.join(PRODUCTION_DIR, "package.json");
-    const rootNodeModules = path.join(process.cwd(), "node_modules");
-
-    // If production has a package.json, npm install there
-    if (fs.existsSync(prodPackageJson)) {
-      console.log("[prod-server] Installing dependencies in production dir...");
-      childProcess.execSync(`cd "${PRODUCTION_DIR}" && npm install --legacy-peer-deps 2>&1`, {
-        stdio: "pipe",
-      });
-    }
-    // Otherwise copy from root if available
-    else if (
-      !fs.existsSync(prodNodeModules) &&
-      fs.existsSync(rootNodeModules)
-    ) {
-      console.log("[prod-server] Copying node_modules to production dir...");
-      childProcess.execSync(`cp -r "${rootNodeModules}" "${prodNodeModules}"`);
+    if (!fs.existsSync(prodNodeModules)) {
+      // Try dev workspace first (has the site's full dependencies)
+      const devNodeModules = path.join(DEV_DIR, "node_modules");
+      if (fs.existsSync(devNodeModules)) {
+        console.log("[prod-server] Symlinking dev node_modules to production...");
+        fs.symlinkSync(devNodeModules, prodNodeModules);
+      }
+      // Fallback: if production has its own package.json
+      else if (fs.existsSync(path.join(PRODUCTION_DIR, "package.json"))) {
+        console.log("[prod-server] Installing dependencies in production dir...");
+        childProcess.execSync(`cd "${PRODUCTION_DIR}" && npm install --legacy-peer-deps 2>&1`, {
+          stdio: "pipe",
+        });
+      }
+      // Last resort: copy template's node_modules
+      else {
+        const rootNodeModules = path.join(process.cwd(), "node_modules");
+        if (fs.existsSync(rootNodeModules)) {
+          console.log("[prod-server] Copying root node_modules to production...");
+          childProcess.execSync(`cp -r "${rootNodeModules}" "${prodNodeModules}"`);
+        }
+      }
     }
   } catch (e) {
     console.warn("[prod-server] Failed to ensure dependencies:", e.message);
