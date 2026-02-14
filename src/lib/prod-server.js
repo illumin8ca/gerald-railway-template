@@ -12,9 +12,21 @@ export function getProdServerProcess() {
 }
 
 export function isProdSSR() {
-  return fs.existsSync(
-    path.join(PRODUCTION_DIR, "dist", "server", "entry.mjs"),
+  return (
+    fs.existsSync(path.join(PRODUCTION_DIR, "dist", "server", "entry.mjs")) ||
+    fs.existsSync(path.join(PRODUCTION_DIR, "server", "entry.mjs"))
   );
+}
+
+/** Return the correct entry script path relative to PRODUCTION_DIR */
+function getSSREntryScript() {
+  if (fs.existsSync(path.join(PRODUCTION_DIR, "dist", "server", "entry.mjs"))) {
+    return "dist/server/entry.mjs";
+  }
+  if (fs.existsSync(path.join(PRODUCTION_DIR, "server", "entry.mjs"))) {
+    return "server/entry.mjs";
+  }
+  return null;
 }
 
 export async function startProdServer(retryCount = 0) {
@@ -41,7 +53,7 @@ export async function startProdServer(retryCount = 0) {
     ? `https://${clientDomain}`
     : `http://localhost:${PROD_SERVER_PORT}`;
 
-  const startScript = "dist/server/entry.mjs";
+  const startScript = getSSREntryScript() || "dist/server/entry.mjs";
 
   prodServerProcess = childProcess.spawn("node", [startScript], {
     cwd: PRODUCTION_DIR,
