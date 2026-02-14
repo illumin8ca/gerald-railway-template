@@ -4,19 +4,16 @@
  * 
  * Patches OpenClaw's hardcoded WebSocket maxPayload from 512KB to 10MB.
  * 
- * WHY: OpenClaw's gateway CLI has `MAX_PAYLOAD_BYTES = 512 * 1024` hardcoded.
+ * WHY: OpenClaw's gateway CLI previously had `MAX_PAYLOAD_BYTES = 512 * 1024` hardcoded.
  *      Base64-encoded images from the webchat easily exceed 512KB, causing
  *      WebSocket Error 1009 (Message Too Big) and killing the connection.
  * 
- * SAFE: Only replaces the exact string `512 * 1024` in the MAX_PAYLOAD_BYTES
- *       constant declaration. If the string isn't found (already patched or
- *       OpenClaw changed the code), it skips the file harmlessly.
+ * NOTE: As of early 2026, upstream OpenClaw already ships with 10MB maxPayload.
+ *       This script is kept as a safety net — it patches if needed, and is a
+ *       no-op if the value is already 10MB.
  * 
  * RUN: After any `openclaw update`, or manually:
  *       node ~/clawd/scripts/patch-ws-maxpayload.js
- * 
- * UPSTREAM: https://github.com/openclaw/openclaw/issues/XXX
- *           (request to make maxPayload configurable via gateway config)
  */
 
 const fs = require('fs');
@@ -47,19 +44,26 @@ function patchFile(filePath) {
     content = fs.readFileSync(filePath, 'utf8');
   } catch (err) {
     console.error(`❌ Cannot read ${basename}: ${err.message}`);
-    return false;
+    return 'error';
   }
 
-  // Already patched?
+  // Already at 10MB (either we patched it or upstream fixed it)?
   if (content.includes(NEW_PATTERN)) {
-    console.log(`✅ ${basename} — already patched (10MB)`);
-    return true;
+    console.log(`✅ ${basename} — already 10MB (no patch needed)`);
+    return 'ok';
   }
 
   // Needs patching?
   if (!content.includes(OLD_PATTERN)) {
-    console.warn(`⚠️  ${basename} — pattern not found (OpenClaw may have changed the code)`);
-    return false;
+    // Neither old nor new pattern — upstream may have changed the code entirely.
+    // Check if there's any MAX_PAYLOAD_BYTES at all.
+    const match = content.match(/const MAX_PAYLOAD_BYTES\s*=\s*([^;]+);/);
+    if (match) {
+      console.log(`ℹ️  ${basename} — MAX_PAYLOAD_BYTES = ${match[1].trim()} (unknown value, skipping)`);
+    } else {
+      console.log(`ℹ️  ${basename} — no MAX_PAYLOAD_BYTES found (skipping)`);
+    }
+    return 'skip';
   }
 
   // Apply patch
@@ -68,10 +72,10 @@ function patchFile(filePath) {
   try {
     fs.writeFileSync(filePath, patched, 'utf8');
     console.log(`🔧 ${basename} — patched: 512KB → 10MB`);
-    return true;
+    return 'patched';
   } catch (err) {
     console.error(`❌ Cannot write ${basename}: ${err.message}`);
-    return false;
+    return 'error';
   }
 }
 
@@ -86,19 +90,22 @@ if (files.length === 0) {
   process.exit(1);
 }
 
+let okCount = 0;
 let patchedCount = 0;
-let failCount = 0;
+let skipCount = 0;
+let errorCount = 0;
 
 for (const file of files) {
-  if (patchFile(file)) {
-    patchedCount++;
-  } else {
-    failCount++;
-  }
+  const result = patchFile(file);
+  if (result === 'ok') okCount++;
+  else if (result === 'patched') patchedCount++;
+  else if (result === 'skip') skipCount++;
+  else errorCount++;
 }
 
-console.log(`\nResult: ${patchedCount} patched, ${failCount} failed, ${files.length} total`);
+console.log(`\nResult: ${patchedCount} patched, ${okCount} already OK, ${skipCount} skipped, ${errorCount} errors (${files.length} total)`);
 
-if (failCount > 0) {
+// Only fail on actual errors (can't read/write files), not on skip/already-ok
+if (errorCount > 0) {
   process.exit(1);
 }
