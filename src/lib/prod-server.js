@@ -52,20 +52,26 @@ export async function startProdServer(retryCount = 0) {
   try {
     const prodNodeModules = path.join(PRODUCTION_DIR, "node_modules");
     if (!fs.existsSync(prodNodeModules)) {
-      // Try dev workspace first (has the site's full dependencies)
-      const devNodeModules = path.join(DEV_DIR, "node_modules");
-      if (fs.existsSync(devNodeModules)) {
-        console.log("[prod-server] Symlinking dev node_modules to production...");
-        fs.symlinkSync(devNodeModules, prodNodeModules);
+      // Check if workspace has package.json and install there
+      const workspaceDir = path.dirname(PRODUCTION_DIR); // /data/workspace/site
+      const workspacePackageJson = path.join(workspaceDir, "package.json");
+      const workspaceNodeModules = path.join(workspaceDir, "node_modules");
+      
+      if (fs.existsSync(workspacePackageJson)) {
+        if (!fs.existsSync(workspaceNodeModules)) {
+          console.log("[prod-server] Installing dependencies in workspace...");
+          childProcess.execSync(`cd "${workspaceDir}" && npm install --legacy-peer-deps 2>&1`, {
+            stdio: "pipe",
+            timeout: 120000,
+          });
+        }
+        // Symlink workspace node_modules to production
+        if (fs.existsSync(workspaceNodeModules)) {
+          console.log("[prod-server] Symlinking workspace node_modules to production...");
+          fs.symlinkSync(workspaceNodeModules, prodNodeModules);
+        }
       }
-      // Fallback: if production has its own package.json
-      else if (fs.existsSync(path.join(PRODUCTION_DIR, "package.json"))) {
-        console.log("[prod-server] Installing dependencies in production dir...");
-        childProcess.execSync(`cd "${PRODUCTION_DIR}" && npm install --legacy-peer-deps 2>&1`, {
-          stdio: "pipe",
-        });
-      }
-      // Last resort: copy template's node_modules
+      // Fallback: copy template's node_modules
       else {
         const rootNodeModules = path.join(process.cwd(), "node_modules");
         if (fs.existsSync(rootNodeModules)) {
