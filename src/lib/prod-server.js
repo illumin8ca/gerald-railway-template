@@ -48,6 +48,21 @@ export async function startProdServer(retryCount = 0) {
     await new Promise((r) => setTimeout(r, 2000));
   } catch {}
 
+  // Ensure node_modules is available for SSR runtime dependencies
+  try {
+    const prodNodeModules = path.join(PRODUCTION_DIR, "node_modules");
+    const rootNodeModules = path.join(process.cwd(), "node_modules");
+    if (
+      !fs.existsSync(prodNodeModules) &&
+      fs.existsSync(rootNodeModules)
+    ) {
+      console.log("[prod-server] Copying node_modules to production dir...");
+      childProcess.execSync(`cp -r "${rootNodeModules}" "${prodNodeModules}"`);
+    }
+  } catch (e) {
+    console.warn("[prod-server] Failed to copy node_modules:", e.message);
+  }
+
   const clientDomain = getClientDomain();
   const siteUrl = clientDomain
     ? `https://${clientDomain}`
