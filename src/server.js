@@ -19,6 +19,7 @@ import {
   GATEWAY_TARGET,
   OPENCLAW_ENTRY,
   OPENCLAW_NODE,
+  OPENCLAW_GATEWAY_BIND,
   SITE_DIR,
   PRODUCTION_DIR,
   DEV_DIR,
@@ -1309,10 +1310,13 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
 
       console.log(`[onboard] ========== TOKEN DIAGNOSTIC END ==========`);
 
-      await runCmd(
-        OPENCLAW_NODE,
-        clawArgs(["config", "set", "gateway.bind", "loopback"]),
-      );
+      // Only set gateway.bind when env override is explicitly set
+      if (OPENCLAW_GATEWAY_BIND) {
+        await runCmd(
+          OPENCLAW_NODE,
+          clawArgs(["config", "set", "gateway.bind", OPENCLAW_GATEWAY_BIND]),
+        );
+      }
       await runCmd(
         OPENCLAW_NODE,
         clawArgs([

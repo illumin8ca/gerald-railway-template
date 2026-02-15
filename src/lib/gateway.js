@@ -6,6 +6,7 @@ import {
   GATEWAY_TARGET,
   INTERNAL_GATEWAY_PORT,
   OPENCLAW_NODE,
+  OPENCLAW_GATEWAY_BIND,
   STATE_DIR,
   WORKSPACE_DIR,
 } from "./constants.js";
@@ -24,6 +25,27 @@ let crashCount = 0;
 let lastCrashTime = 0;
 const MAX_CRASH_RESTARTS = 5;
 const CRASH_WINDOW_MS = 300_000; // 5 minutes
+
+/**
+ * Resolve gateway bind address: env override → config → fallback
+ */
+export function resolveGatewayBind() {
+  // 1. Check env override first
+  if (OPENCLAW_GATEWAY_BIND) {
+    return OPENCLAW_GATEWAY_BIND;
+  }
+  // 2. Read from openclaw.json config
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath(), "utf8"));
+    if (config?.gateway?.bind) {
+      return config.gateway.bind;
+    }
+  } catch {
+    // Config doesn't exist or can't be read
+  }
+  // 3. Fallback to loopback
+  return "loopback";
+}
 
 export function getGatewayProc() {
   return gatewayProc;
@@ -103,10 +125,13 @@ export async function startGateway(OPENCLAW_GATEWAY_TOKEN) {
     OPENCLAW_NODE,
     clawArgs(["config", "set", "gateway.auth.mode", "token"]),
   );
-  await runCmd(
-    OPENCLAW_NODE,
-    clawArgs(["config", "set", "gateway.bind", "loopback"]),
-  );
+  // Only set gateway.bind if env override is explicitly set
+  if (OPENCLAW_GATEWAY_BIND) {
+    await runCmd(
+      OPENCLAW_NODE,
+      clawArgs(["config", "set", "gateway.bind", OPENCLAW_GATEWAY_BIND]),
+    );
+  }
   await runCmd(
     OPENCLAW_NODE,
     clawArgs(["config", "set", "gateway.port", String(INTERNAL_GATEWAY_PORT)]),
@@ -251,11 +276,12 @@ export async function startGateway(OPENCLAW_GATEWAY_TOKEN) {
 
   console.log(`[gateway] ========== TOKEN SYNC COMPLETE ==========`);
 
+  const bindAddress = resolveGatewayBind();
   const args = [
     "gateway",
     "run",
     "--bind",
-    "loopback",
+    bindAddress,
     "--port",
     String(INTERNAL_GATEWAY_PORT),
     "--auth",
@@ -419,7 +445,7 @@ export function buildOnboardArgs(payload, OPENCLAW_GATEWAY_TOKEN) {
     "--workspace",
     WORKSPACE_DIR,
     "--gateway-bind",
-    "loopback",
+    OPENCLAW_GATEWAY_BIND || "loopback",
     "--gateway-port",
     String(INTERNAL_GATEWAY_PORT),
     "--gateway-auth",

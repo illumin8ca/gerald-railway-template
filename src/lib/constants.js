@@ -57,6 +57,9 @@ export const OPENCLAW_ENTRY =
   process.env.OPENCLAW_ENTRY?.trim() || "/openclaw/dist/entry.js";
 export const OPENCLAW_NODE = process.env.OPENCLAW_NODE?.trim() || "node";
 
+// Gateway bind override (null = use config, or env/config value)
+export const OPENCLAW_GATEWAY_BIND = process.env.OPENCLAW_GATEWAY_BIND?.trim() || null;
+
 // Setup
 export const SETUP_PASSWORD = process.env.SETUP_PASSWORD?.trim();
 
