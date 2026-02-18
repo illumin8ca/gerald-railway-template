@@ -290,12 +290,24 @@ export async function startGateway(OPENCLAW_GATEWAY_TOKEN) {
     OPENCLAW_GATEWAY_TOKEN,
   ];
 
+  // Mitigate uv_interface_addresses system errors in containers
+  // See: src/lib/network-interfaces-shim.cjs
+  const shimPath = path.join(process.cwd(), "src", "lib", "network-interfaces-shim.cjs");
+  const nodeOptions = fs.existsSync(shimPath)
+    ? `--require ${shimPath}`
+    : "";
+
+  if (nodeOptions) {
+    console.log(`[gateway] Applying network shim: ${shimPath}`);
+  }
+
   gatewayProc = childProcess.spawn(OPENCLAW_NODE, clawArgs(args), {
     stdio: "inherit",
     env: {
       ...process.env,
       OPENCLAW_STATE_DIR: STATE_DIR,
       OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
+      ...(nodeOptions ? { NODE_OPTIONS: nodeOptions } : {}),
     },
   });
 
@@ -314,8 +326,30 @@ export async function startGateway(OPENCLAW_GATEWAY_TOKEN) {
   // Store token for auto-restart
   lastGatewayToken = OPENCLAW_GATEWAY_TOKEN;
 
+  // Capture stderr to detect specific crash signatures
+  let stderrBuffer = "";
+  if (gatewayProc.stderr) {
+    gatewayProc.stderr.on("data", (data) => {
+      stderrBuffer += data.toString();
+      // Keep only last 4KB to prevent memory bloat
+      if (stderrBuffer.length > 4096) {
+        stderrBuffer = stderrBuffer.slice(-4096);
+      }
+    });
+  }
+
   gatewayProc.on("exit", (code, signal) => {
     console.error(`[gateway] exited code=${code} signal=${signal}`);
+    
+    // Detect uv_interface_addresses crash signature
+    const hasUvInterfaceError = stderrBuffer.includes("uv_interface_addresses") ||
+                                  stderrBuffer.includes("ERR_SYSTEM_ERROR");
+    
+    if (hasUvInterfaceError) {
+      console.error(`[gateway] CRASH ROOT CAUSE: uv_interface_addresses syscall failed (container compatibility issue)`);
+      console.error(`[gateway] MITIGATION: Ensure network-interfaces-shim.cjs is loaded via NODE_OPTIONS`);
+    }
+    
     gatewayProc = null;
 
     // Auto-restart on unexpected crash (not SIGTERM/SIGINT = intentional stop)
@@ -326,6 +360,13 @@ export async function startGateway(OPENCLAW_GATEWAY_TOKEN) {
       }
       lastCrashTime = now;
       crashCount++;
+
+      // Short-circuit restart thrash for known fatal errors
+      if (hasUvInterfaceError && crashCount >= 3) {
+        console.error(`[gateway] FATAL: uv_interface_addresses error persists after ${crashCount} attempts. Not restarting.`);
+        console.error(`[gateway] ACTION REQUIRED: Check that src/lib/network-interfaces-shim.cjs exists and NODE_OPTIONS is set`);
+        return; // Don't restart
+      }
 
       if (crashCount <= MAX_CRASH_RESTARTS) {
         const delayMs = Math.min(2000 * Math.pow(2, crashCount - 1), 30000);
