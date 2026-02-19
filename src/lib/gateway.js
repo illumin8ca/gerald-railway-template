@@ -428,6 +428,34 @@ async function indexWorkspaceForQmd() {
     timeout: 120_000,
   };
 
+  const getExecErrorText = (err) => [
+    err?.message,
+    err?.stdout?.toString?.(),
+    err?.stderr?.toString?.(),
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const isBrokenQmdInstall = (err) => {
+    const text = getExecErrorText(err);
+    return (
+      text.includes("Cannot find module") &&
+      text.includes("@tobilu/qmd")
+    );
+  };
+
+  // Preflight qmd binary: in some containers the shim exists but its module is missing.
+  try {
+    childProcess.execSync("qmd --version 2>&1", execOpts);
+  } catch (err) {
+    if (isBrokenQmdInstall(err)) {
+      console.warn("[qmd] qmd install is broken (missing @tobilu/qmd); skipping workspace indexing");
+      return;
+    }
+    console.warn(`[qmd] preflight failed, skipping workspace indexing: ${err.message}`);
+    return;
+  }
+
   // Check if workspace collection already exists
   try {
     const status = childProcess.execSync('qmd collection list 2>&1', execOpts).toString();
@@ -448,6 +476,10 @@ async function indexWorkspaceForQmd() {
     );
     console.log('[qmd] workspace collection created and indexed');
   } catch (err) {
+    if (isBrokenQmdInstall(err)) {
+      console.warn("[qmd] qmd install is broken (missing @tobilu/qmd); skipping workspace indexing");
+      return;
+    }
     console.warn('[qmd] failed to create collection:', err.message);
   }
 }
