@@ -290,29 +290,32 @@ export async function startGateway(OPENCLAW_GATEWAY_TOKEN) {
     OPENCLAW_GATEWAY_TOKEN,
   ];
 
-  // Mitigate uv_interface_addresses system errors in containers
-  // See: src/lib/network-interfaces-shim.cjs
-  const shimPath = path.join(process.cwd(), "src", "lib", "network-interfaces-shim.cjs");
-  const nodeOptions = fs.existsSync(shimPath)
-    ? `--require ${shimPath}`
-    : "";
+  const launcherPath = path.join(
+    process.cwd(),
+    "src",
+    "lib",
+    "openclaw-launcher.cjs",
+  );
+  const useLauncher = fs.existsSync(launcherPath);
+  const spawnArgs = useLauncher
+    ? [launcherPath, ...clawArgs(args)]
+    : clawArgs(args);
 
-  if (nodeOptions) {
-    console.log(`[gateway] Applying network shim: ${shimPath}`);
+  if (useLauncher) {
+    console.log(`[gateway] Using launcher shim: ${launcherPath}`);
   }
 
-  gatewayProc = childProcess.spawn(OPENCLAW_NODE, clawArgs(args), {
+  gatewayProc = childProcess.spawn(OPENCLAW_NODE, spawnArgs, {
     stdio: "inherit",
     env: {
       ...process.env,
       OPENCLAW_STATE_DIR: STATE_DIR,
       OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
-      ...(nodeOptions ? { NODE_OPTIONS: nodeOptions } : {}),
     },
   });
 
   console.log(
-    `[gateway] starting with command: ${OPENCLAW_NODE} ${clawArgs(args).join(" ")}`,
+    `[gateway] starting with command: ${OPENCLAW_NODE} ${spawnArgs.join(" ")}`,
   );
   console.log(`[gateway] STATE_DIR: ${STATE_DIR}`);
   console.log(`[gateway] WORKSPACE_DIR: ${WORKSPACE_DIR}`);
@@ -347,7 +350,7 @@ export async function startGateway(OPENCLAW_GATEWAY_TOKEN) {
     
     if (hasUvInterfaceError) {
       console.error(`[gateway] CRASH ROOT CAUSE: uv_interface_addresses syscall failed (container compatibility issue)`);
-      console.error(`[gateway] MITIGATION: Ensure network-interfaces-shim.cjs is loaded via NODE_OPTIONS`);
+      console.error(`[gateway] MITIGATION: Ensure src/lib/openclaw-launcher.cjs is present and being used`);
     }
     
     gatewayProc = null;
@@ -364,7 +367,7 @@ export async function startGateway(OPENCLAW_GATEWAY_TOKEN) {
       // Short-circuit restart thrash for known fatal errors
       if (hasUvInterfaceError && crashCount >= 3) {
         console.error(`[gateway] FATAL: uv_interface_addresses error persists after ${crashCount} attempts. Not restarting.`);
-        console.error(`[gateway] ACTION REQUIRED: Check that src/lib/network-interfaces-shim.cjs exists and NODE_OPTIONS is set`);
+        console.error(`[gateway] ACTION REQUIRED: Check that src/lib/openclaw-launcher.cjs exists and startup logs show launcher shim usage`);
         return; // Don't restart
       }
 
