@@ -23,6 +23,7 @@ let gatewayStarting = null;
 let lastGatewayToken = null;
 let crashCount = 0;
 let lastCrashTime = 0;
+let loggedUvCrashRootCause = false;
 const MAX_CRASH_RESTARTS = 5;
 const CRASH_WINDOW_MS = 300_000; // 5 minutes
 
@@ -290,23 +291,16 @@ export async function startGateway(OPENCLAW_GATEWAY_TOKEN) {
     OPENCLAW_GATEWAY_TOKEN,
   ];
 
-  const launcherPath = path.join(
-    process.cwd(),
-    "src",
-    "lib",
-    "openclaw-launcher.cjs",
-  );
-  const useLauncher = fs.existsSync(launcherPath);
-  const spawnArgs = useLauncher
-    ? [launcherPath, ...clawArgs(args)]
-    : clawArgs(args);
+  const spawnArgs = clawArgs(args);
+  const launcherPath = spawnArgs[0];
+  const useLauncher = launcherPath?.endsWith("openclaw-launcher.cjs");
 
   if (useLauncher) {
     console.log(`[gateway] Using launcher shim: ${launcherPath}`);
   }
 
   gatewayProc = childProcess.spawn(OPENCLAW_NODE, spawnArgs, {
-    stdio: "inherit",
+    stdio: ["ignore", "inherit", "pipe"],
     env: {
       ...process.env,
       OPENCLAW_STATE_DIR: STATE_DIR,
@@ -333,6 +327,7 @@ export async function startGateway(OPENCLAW_GATEWAY_TOKEN) {
   let stderrBuffer = "";
   if (gatewayProc.stderr) {
     gatewayProc.stderr.on("data", (data) => {
+      process.stderr.write(data);
       stderrBuffer += data.toString();
       // Keep only last 4KB to prevent memory bloat
       if (stderrBuffer.length > 4096) {
@@ -348,7 +343,8 @@ export async function startGateway(OPENCLAW_GATEWAY_TOKEN) {
     const hasUvInterfaceError = stderrBuffer.includes("uv_interface_addresses") ||
                                   stderrBuffer.includes("ERR_SYSTEM_ERROR");
     
-    if (hasUvInterfaceError) {
+    if (hasUvInterfaceError && !loggedUvCrashRootCause) {
+      loggedUvCrashRootCause = true;
       console.error(`[gateway] CRASH ROOT CAUSE: uv_interface_addresses syscall failed (container compatibility issue)`);
       console.error(`[gateway] MITIGATION: Ensure src/lib/openclaw-launcher.cjs is present and being used`);
     }

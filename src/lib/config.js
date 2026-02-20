@@ -250,6 +250,17 @@ export function fixInvalidConfig(dryRun = false) {
     }
   }
 
+  // --- Remove unsupported gateway keys ---
+  if (config?.gateway && typeof config.gateway === "object") {
+    if (Object.hasOwn(config.gateway, "customBindHost")) {
+      issues.push(`gateway.customBindHost is unsupported — removing`);
+      if (!dryRun) {
+        delete config.gateway.customBindHost;
+        changed = true;
+      }
+    }
+  }
+
   // --- Write repaired config ---
   if (changed && !dryRun) {
     // Create backup before writing

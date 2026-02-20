@@ -10,6 +10,14 @@
 2. [docs/01-architecture/architecture.md](./docs/01-architecture/architecture.md) -- Full system design
 3. Sub-directory AGENTS.md files -- Detailed patterns per area
 
+## Troubleshooting
+
+- **Browser node / "pairing required" (1008) error:** See [docs/07-operations/browser-node-pairing-fix.md](./docs/07-operations/browser-node-pairing-fix.md)
+  The identity device is likely missing `operator.read` / `operator.write` scopes. Quick check:
+  ```bash
+  cat /data/.openclaw/identity/device-auth.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['tokens']['operator']['scopes'])"
+  ```
+
 ## Quick Start
 
 ```bash

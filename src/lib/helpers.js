@@ -22,6 +22,15 @@ export function parseCookiesFromString(cookieStr) {
 }
 
 export function clawArgs(args) {
+  const launcherPath = path.join(
+    process.cwd(),
+    "src",
+    "lib",
+    "openclaw-launcher.cjs",
+  );
+  if (fs.existsSync(launcherPath)) {
+    return [launcherPath, OPENCLAW_ENTRY, ...args];
+  }
   return [OPENCLAW_ENTRY, ...args];
 }
 
