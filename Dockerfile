@@ -35,7 +35,7 @@ RUN set -eux; \
     sed -i -E 's/"openclaw"[[:space:]]*:[[:space:]]*"workspace:[^"]+"/"openclaw": "*"/g' "$f"; \
   done
 
-RUN set -eu -o pipefail; \
+RUN set -eu; \
   attempts=0; \
   max_retries="${OPENCLAW_BUILD_RETRIES}"; \
   case "${max_retries}" in \
