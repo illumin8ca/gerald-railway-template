@@ -20,9 +20,12 @@ RUN corepack enable
 
 WORKDIR /openclaw
 
-# Pin to a known ref (tag/branch). If it doesn't exist, fall back to main.
+# Pin to a known ref (tag/branch), with optional previous-revision fallback on build failure.
 ARG OPENCLAW_GIT_REF=main
-RUN git clone --depth 1 --branch "${OPENCLAW_GIT_REF}" https://github.com/openclaw/openclaw.git .
+ARG OPENCLAW_BUILD_RETRIES=1
+
+# Keep a short history so we can step back a commit if main is currently broken.
+RUN git clone --depth 5 --branch "${OPENCLAW_GIT_REF}" https://github.com/openclaw/openclaw.git .
 
 # Patch: relax version requirements for packages that may reference unpublished versions.
 # Apply to all extension package.json files to handle workspace protocol (workspace:*).
@@ -32,8 +35,21 @@ RUN set -eux; \
     sed -i -E 's/"openclaw"[[:space:]]*:[[:space:]]*"workspace:[^"]+"/"openclaw": "*"/g' "$f"; \
   done
 
-RUN pnpm install --no-frozen-lockfile
-RUN pnpm build
+RUN set -eu; \
+  attempts=0; \
+  max_retries="${OPENCLAW_BUILD_RETRIES}"; \
+  while true; do \
+    if pnpm install --no-frozen-lockfile && pnpm build; then \
+      break; \
+    fi; \
+    attempts=$((attempts + 1)); \
+    if [ "${attempts}" -gt "${max_retries}" ]; then \
+      echo "OpenClaw build failed after checking ${attempts} revision(s)."; \
+      exit 1; \
+    fi; \
+    echo "OpenClaw build failed on revision $(git rev-parse --short HEAD), retrying with previous commit..."; \
+    git reset --hard HEAD~1; \
+  done
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:install && pnpm ui:build
 
