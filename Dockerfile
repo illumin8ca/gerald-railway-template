@@ -115,6 +115,8 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'exec node /openclaw/dist/entry.js "$@"'
   && chmod +x /usr/local/bin/openclaw
 
 COPY src ./src
+# Ensure network shim exists at the preload path used by NODE_OPTIONS in this image.
+RUN cp src/lib/network-interfaces-shim.cjs /tmp/openclaw-network-shim.cjs
 
 # Persist rclone config and chroma cache on /data volume
 ENV RCLONE_CONFIG=/data/.config/rclone/rclone.conf

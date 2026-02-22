@@ -2,10 +2,31 @@ import childProcess from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+function ensureOpenclawNetworkShim() {
+  const sourcePath = path.join(__dirname, "network-interfaces-shim.cjs");
+  const targetPath = "/tmp/openclaw-network-shim.cjs";
+
+  try {
+    if (!fs.existsSync(sourcePath)) {
+      return;
+    }
+
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.copyFileSync(sourcePath, targetPath);
+    console.log(`[startup] synced network shim at ${targetPath}`);
+  } catch (err) {
+    console.warn(`[startup] could not sync network shim: ${err.message}`);
+  }
+}
 
 // Restore Claude Code and Codex from persistent volume on container restart.
 export function restorePersistedTools() {
   const home = os.homedir();
+  ensureOpenclawNetworkShim();
 
   const localShare = path.join(home, ".local", "share");
   const localBin = path.join(home, ".local", "bin");
