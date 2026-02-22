@@ -136,6 +136,12 @@ RUN find /openclaw -name 'esbuild' -path '*/bin/esbuild' -type f -delete 2>/dev/
     find /openclaw -name 'esbuild' -path '*/.bin/esbuild' -type l -delete 2>/dev/null; \
     true
 
+# Make gateway management CLI available inside the container for ad-hoc restarts.
+COPY scripts/gateway-status.sh /usr/local/bin/gateway-status.sh
+COPY scripts/gateway-restart.sh /usr/local/bin/gateway-restart.sh
+COPY scripts/claw /usr/local/bin/claw
+RUN chmod +x /usr/local/bin/gateway-status.sh /usr/local/bin/gateway-restart.sh /usr/local/bin/claw
+
 # Provide a openclaw executable
 RUN printf '%s\n' '#!/usr/bin/env bash' 'exec node /openclaw/dist/entry.js "$@"' > /usr/local/bin/openclaw \
   && chmod +x /usr/local/bin/openclaw

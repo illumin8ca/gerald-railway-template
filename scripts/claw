@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+BASE_URL="${OPENCLAW_WRAPPER_URL:-http://127.0.0.1:8080}"
+if [ -z "${SETUP_PASSWORD:-}" ] && [ -n "${CLAW_SETUP_PASSWORD:-}" ]; then
+  SETUP_PASSWORD="${CLAW_SETUP_PASSWORD}"
+elif [ -z "${SETUP_PASSWORD:-}" ]; then
+  echo "Missing SETUP_PASSWORD (or CLAW_SETUP_PASSWORD)." >&2
+  echo "Set this env var before running: export SETUP_PASSWORD=..." >&2
+  exit 1
+fi
+
+api_call() {
+  local method="$1"
+  local path="$2"
+  curl -sS -X "$method" \
+    -u ":${SETUP_PASSWORD}" \
+    "${BASE_URL}${path}"
+}
+
+USAGE="Usage:
+  claw gateway status
+  claw gateway restart
+  claw openclaw <args...>   # proxy to openclaw binary
+  claw --help"
+
+if [ "$#" -lt 1 ]; then
+  echo "$USAGE"
+  exit 1
+fi
+
+case "$1" in
+  gateway)
+    if [ "${2-}" = "" ]; then
+      echo "$USAGE"
+      exit 1
+    fi
+    case "$2" in
+      status)
+        api_call GET "/setup/api/gateway/status"
+        ;;
+      restart)
+        api_call POST "/setup/api/gateway/restart"
+        ;;
+      *)
+        echo "$USAGE"
+        exit 1
+        ;;
+    esac
+    ;;
+  openclaw)
+    shift
+    if [ "$#" -eq 0 ]; then
+      echo "Usage: claw openclaw <args...>"
+      exit 1
+    fi
+    exec openclaw "$@"
+    ;;
+  help|--help|-h|"")
+    echo "$USAGE"
+    ;;
+  *)
+    echo "$USAGE"
+    exit 1
+    ;;
+esac

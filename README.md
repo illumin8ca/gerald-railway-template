@@ -79,8 +79,11 @@ gerald-railway-template/
 │   ├── public/            # Setup wizard frontend (HTML, CSS, JS)
 │   └── templates/         # Client skill templates
 ├── scripts/
-│   ├── smoke.js           # Docker smoke test
-│   └── clone-website-repo.sh
+│   ├── smoke.js                # Docker smoke test
+│   ├── clone-website-repo.sh
+│   ├── gateway-status.sh        # Check wrapper-managed gateway status
+│   ├── gateway-restart.sh       # Restart gateway process via setup API
+│   └── claw                    # In-container helper CLI (`claw gateway status|restart`)
 ├── docs/                  # Organized documentation (numbered folders)
 ├── Dockerfile             # Multi-stage build (OpenClaw from source + runtime)
 ├── railway.toml           # Railway config-as-code (DOCKERFILE builder)
@@ -118,6 +121,44 @@ See [.env.example](./.env.example) for the full list with descriptions.
 | HMR not working on dev site | Check WebSocket proxy: `railway logs \| grep '[ws-upgrade]'` |
 | Dashboard login fails | Verify `ALLOWED_TELEGRAM_IDS` includes your Telegram user ID |
 | Build fails (esbuild) | Wrapper auto-handles; check `[build]` logs if persistent |
+
+### Restarting Gateway (No `systemctl`)
+
+This container runs as a single wrapper process (no `systemd`), so `systemctl` is not expected to exist.
+
+- Restart only the gateway:
+```bash
+SETUP_PASSWORD=... bash scripts/gateway-restart.sh
+```
+
+- Check gateway status:
+```bash
+SETUP_PASSWORD=... bash scripts/gateway-status.sh
+```
+
+When running inside the container, use the `claw` helper:
+```bash
+claw gateway status
+claw gateway restart
+```
+
+It is equivalent to calling:
+```bash
+SETUP_PASSWORD=... OPENCLAW_WRAPPER_URL=http://127.0.0.1:8080 bash scripts/gateway-status.sh
+SETUP_PASSWORD=... OPENCLAW_WRAPPER_URL=http://127.0.0.1:8080 bash scripts/gateway-restart.sh
+```
+
+- Remote restart (for Railway URL):
+```bash
+OPENCLAW_WRAPPER_URL=https://your-app.up.railway.app \
+SETUP_PASSWORD=... \
+bash scripts/gateway-restart.sh
+```
+
+You can also call the same endpoint directly:
+```bash
+curl -u ":$SETUP_PASSWORD" -X POST "${OPENCLAW_WRAPPER_URL}/setup/api/gateway/restart"
+```
 
 ## License
 

@@ -8,6 +8,8 @@
   "scripts": {
     "dev": "node src/server.js",
     "start": "node src/server.js",
+    "gateway:status": "bash scripts/gateway-status.sh",
+    "gateway:restart": "bash scripts/gateway-restart.sh",
     "lint": "node -c src/server.js",
     "smoke": "node scripts/smoke.js"
   },
