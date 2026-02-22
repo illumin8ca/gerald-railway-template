@@ -35,9 +35,15 @@ RUN set -eux; \
     sed -i -E 's/"openclaw"[[:space:]]*:[[:space:]]*"workspace:[^"]+"/"openclaw": "*"/g' "$f"; \
   done
 
-RUN set -eu; \
+RUN set -eu -o pipefail; \
   attempts=0; \
   max_retries="${OPENCLAW_BUILD_RETRIES}"; \
+  case "${max_retries}" in \
+    ''|*[!0-9]*) \
+      echo "OPENCLAW_BUILD_RETRIES must be an integer. Falling back to 1."; \
+      max_retries="1"; \
+      ;; \
+  esac; \
   while true; do \
     if pnpm install --no-frozen-lockfile && pnpm build; then \
       break; \
@@ -45,6 +51,10 @@ RUN set -eu; \
     attempts=$((attempts + 1)); \
     if [ "${attempts}" -gt "${max_retries}" ]; then \
       echo "OpenClaw build failed after checking ${attempts} revision(s)."; \
+      exit 1; \
+    fi; \
+    if ! git rev-parse --verify --quiet HEAD~1 >/dev/null; then \
+      echo "OpenClaw build failed and no previous commit is available to retry (depth too shallow)."; \
       exit 1; \
     fi; \
     echo "OpenClaw build failed on revision $(git rev-parse --short HEAD), retrying with previous commit..."; \
