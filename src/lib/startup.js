@@ -5,6 +5,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const BUN_BIN = "/root/.bun/bin/bun";
+const QMD_BIN = "/root/.bun/bin/qmd";
+const BUN_GLOBAL_DIR = "/root/.bun/install/global";
+const PERSISTED_BUN_GLOBAL_DIR = "/data/.bun/install/global";
 
 function ensureOpenclawNetworkShim() {
   const sourcePath = path.join(__dirname, "network-interfaces-shim.cjs");
@@ -23,10 +27,102 @@ function ensureOpenclawNetworkShim() {
   }
 }
 
+function ensureBunGlobals() {
+  try {
+    fs.mkdirSync(path.dirname(PERSISTED_BUN_GLOBAL_DIR), { recursive: true });
+
+    // Seed the persisted bun global dir once from the image layer so existing tools survive first boot.
+    if (
+      fs.existsSync(BUN_GLOBAL_DIR) &&
+      !fs.existsSync(PERSISTED_BUN_GLOBAL_DIR)
+    ) {
+      fs.cpSync(BUN_GLOBAL_DIR, PERSISTED_BUN_GLOBAL_DIR, { recursive: true });
+      console.log(
+        `[startup] seeded persisted bun globals at ${PERSISTED_BUN_GLOBAL_DIR}`,
+      );
+    }
+
+    let needsLink = true;
+    if (fs.existsSync(BUN_GLOBAL_DIR)) {
+      const stat = fs.lstatSync(BUN_GLOBAL_DIR);
+      if (stat.isSymbolicLink()) {
+        const target = fs.readlinkSync(BUN_GLOBAL_DIR);
+        if (target === PERSISTED_BUN_GLOBAL_DIR) {
+          needsLink = false;
+        } else {
+          fs.unlinkSync(BUN_GLOBAL_DIR);
+        }
+      } else {
+        fs.rmSync(BUN_GLOBAL_DIR, { recursive: true, force: true });
+      }
+    }
+
+    if (needsLink) {
+      fs.symlinkSync(PERSISTED_BUN_GLOBAL_DIR, BUN_GLOBAL_DIR);
+      console.log(
+        `[startup] symlinked ${BUN_GLOBAL_DIR} -> ${PERSISTED_BUN_GLOBAL_DIR}`,
+      );
+    }
+  } catch (err) {
+    console.warn(`[startup] could not persist bun globals: ${err.message}`);
+    return;
+  }
+
+  if (!fs.existsSync(BUN_BIN)) {
+    console.warn(`[startup] bun not found at ${BUN_BIN}; skipping qmd repair`);
+    return;
+  }
+
+  const qmdWorks = () => {
+    try {
+      childProcess.execFileSync(QMD_BIN, ["--version"], {
+        stdio: "ignore",
+        timeout: 20_000,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  if (qmdWorks()) {
+    return;
+  }
+
+  console.log("[startup] qmd missing/broken; installing @tobilu/qmd globally");
+  try {
+    childProcess.execFileSync(BUN_BIN, ["install", "-g", "@tobilu/qmd"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 180_000,
+      env: {
+        ...process.env,
+        PATH: `/root/.bun/bin:${process.env.PATH || ""}`,
+      },
+    });
+  } catch (err) {
+    const out = [
+      err?.stdout?.toString?.().trim(),
+      err?.stderr?.toString?.().trim(),
+      err?.message,
+    ]
+      .filter(Boolean)
+      .join(" | ");
+    console.warn(`[startup] failed to install @tobilu/qmd: ${out}`);
+    return;
+  }
+
+  if (qmdWorks()) {
+    console.log("[startup] qmd install verified");
+  } else {
+    console.warn("[startup] qmd install completed but qmd is still not runnable");
+  }
+}
+
 // Restore Claude Code and Codex from persistent volume on container restart.
 export function restorePersistedTools() {
   const home = os.homedir();
   ensureOpenclawNetworkShim();
+  ensureBunGlobals();
 
   const localShare = path.join(home, ".local", "share");
   const localBin = path.join(home, ".local", "bin");
