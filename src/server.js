@@ -72,6 +72,34 @@ app.disable("x-powered-by");
 app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
 
+async function enforceGatewayRuntimeDefaults() {
+  const trustedProxies = '["127.0.0.1/8","::1/128","100.64.0.0/10","172.16.0.0/12"]';
+  try {
+    const result = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs([
+        "config",
+        "set",
+        "--json",
+        "gateway.trustedProxies",
+        trustedProxies,
+      ]),
+    );
+
+    if (result.code === 0) {
+      console.log("[startup] ensured gateway.trustedProxies default");
+    } else {
+      console.warn(
+        `[startup] failed to set gateway.trustedProxies: ${result.output || `exit ${result.code}`}`,
+      );
+    }
+  } catch (err) {
+    console.warn(
+      `[startup] error setting gateway.trustedProxies: ${err?.message || String(err)}`,
+    );
+  }
+}
+
 // ── Auto-recovery: Detect and fix corrupted dev workspaces ────────────
 // This runs before Dashboard routes to ensure dev workspace is valid
 app.use(async (req, res, next) => {
@@ -2777,6 +2805,12 @@ const server = app.listen(PORT, () => {
   
   // Auto-start the gateway in background (don't block server startup)
   if (isConfigured()) {
+    enforceGatewayRuntimeDefaults().catch((err) => {
+      console.warn(
+        `[startup] could not enforce gateway defaults: ${err?.message || String(err)}`,
+      );
+    });
+
     console.log(`[wrapper] auto-starting gateway in background...`);
     ensureGatewayRunning(OPENCLAW_GATEWAY_TOKEN)
       .then(() => console.log(`[wrapper] ✓ gateway auto-started successfully`))
