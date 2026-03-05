@@ -1,4 +1,4 @@
-# Gerald Railway Template
+# Gerald Railway Template v1.0
 
 One-click Railway deployment for [OpenClaw](https://github.com/openclaw/openclaw), an AI coding assistant platform. Provides a web setup wizard, reverse proxy, persistent state, and multi-service orchestration in a single container.
 

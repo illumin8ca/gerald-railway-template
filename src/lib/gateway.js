@@ -351,8 +351,16 @@ export async function startGateway(OPENCLAW_GATEWAY_TOKEN) {
     
     gatewayProc = null;
 
-    // Auto-restart on unexpected crash (not SIGTERM/SIGINT = intentional stop)
-    if (signal !== 'SIGTERM' && signal !== 'SIGINT' && code !== 0 && lastGatewayToken) {
+    // Auto-restart on unexpected exits.
+    // A clean exit with no signal can still be unexpected for a long-running gateway.
+    const intentionalStop = signal === "SIGTERM" || signal === "SIGINT";
+    const exitedCleanlyWithoutSignal = signal === null && code === 0;
+    const shouldAutoRestart = Boolean(lastGatewayToken) && !intentionalStop && (code !== 0 || exitedCleanlyWithoutSignal);
+
+    if (shouldAutoRestart) {
+      if (exitedCleanlyWithoutSignal) {
+        console.warn("[gateway] exited cleanly without signal; treating as unexpected and restarting");
+      }
       const now = Date.now();
       if (now - lastCrashTime > CRASH_WINDOW_MS) {
         crashCount = 0; // Reset crash counter outside window
